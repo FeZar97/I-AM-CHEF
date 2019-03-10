@@ -261,13 +261,15 @@ void use(pair<int, int> p){
 
 // порезанная клубничка на тарелочке
 void makeChpdStrbr(){
-	if(isCoordsValid(getCellWithIngridCollection(CHPD_STRBR))){
+	// если на кухне есть порезанная клубничка, а в руках нет ничего кроме тарелки/пустых рук
+	if(isCoordsValid(getCellWithIngridCollection(CHPD_STRBR))
+	 && me.ingridCollection <= DISH){
 
 		// если в руках есть тарелка, то идем за клубничкой
 		if(me.haveIngrid(DISH))				use(getCellWithIngridCollection(CHPD_STRBR));
 		// иначе берем тарелку
 		else								use(DISHWASH);
-	} else{
+	}else{
 		// если порезанной клубнички нет...
 
 		// если в руках клубничка, идем ее резать
@@ -361,8 +363,15 @@ void makeSomething(){
 		//    то скидываем me.desiredCollection в dishwasher
 		if(me.desiredCollection != curCustomerVec.at(1).ingridCollection && !is1PartOf2(me.desiredCollection, curCustomerVec.at(1).ingridCollection)){
 			cerr << "makeSomething case 1" << endl;
-			use(DISHWASH);
-			return;
+			cerr << "	my desiredCollection: " << int(me.desiredCollection) << ", order2 is " << int(curCustomerVec.at(1).ingridCollection) << endl;
+			cerr << "	my current ingrids: "   << int(me.ingridCollection) << endl;
+
+			// меняем заказ
+			me.desiredCollection = curCustomerVec.at(1).ingridCollection;
+			me.desiredReady = false;
+
+			// если в руках лишние ингридиенты - скидываем все на свободный стол
+			//if(!is1PartOf2(me.ingridCollection, me.desiredCollection)) use(getFreeTableCoord(me.x, me.y));
 		}
 	}
 
