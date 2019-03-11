@@ -30,10 +30,12 @@ enum INGRID{
 
 	// рецепты WOOD 1
 	RECIPE5	   = DISH + CROISSANT + ICE_C,						// круасанн + мороженое
-	RECIPE6	   = DISH + CROISSANT + BLBR + ICE_C,				// круасанн + черничка + мороженое
-	RECIPE7	   = DISH + CROISSANT + CHPD_STRBR + BLBR,			// круасанн + клубничка + черничка
-	RECIPE8	   = DISH + CROISSANT + CHPD_STRBR + ICE_C,			// круасанн + клубничка + мороженка
-	RECIPE9	   = DISH + ICE_C + BLBR + CHPD_STRBR + CROISSANT	// круасанн + клубничка + мороженка + черничка
+	RECIPE6	   = DISH + CROISSANT + BLBR,						// круасанн + черничка
+	RECIPE7	   = DISH + CROISSANT + CHPD_STRBR,					// круасанн + клубничка
+	RECIPE8	   = DISH + CROISSANT + BLBR + ICE_C,				// круасанн + черничка + мороженое
+	RECIPE9	   = DISH + CROISSANT + CHPD_STRBR + BLBR,			// круасанн + клубничка + черничка
+	RECIPE10   = DISH + CROISSANT + CHPD_STRBR + ICE_C,			// круасанн + клубничка + мороженка
+	RECIPE11   = DISH + ICE_C + BLBR + CHPD_STRBR + CROISSANT	// круасанн + клубничка + мороженка + черничка
 };
 
 // преобразование строки в коллекцию ингрдиентов
@@ -177,17 +179,20 @@ pair<int, int> getCellWithIngrid(short ingrid){
 // если существует ингридиент, в точности переданный в функцию
 bool existStrongly(short ingrid){
 
-	for(auto &p : existingProductVec)
+	for(auto &p: existingProductVec)
 		// если ячейка стола содержит в точности то, что необходимо
-		if(!((p.ingridCollection & ingrid) ^ ingrid))
+		//if(!((p.ingridCollection & ingrid) ^ ingrid)){
+		if(p.ingridCollection == ingrid){
+			cerr << p.x << " " << p.y << " is strong: " << p.ingridCollection << " = " << ingrid << endl;
 			return true;
+		}
 	return false;
 };
 // возвращает координаты ячейки кухни в которой есть строго ingrid
 pair<int, int> getCellWithIngridStrongly(short ingrid){
 	// если ячейка стола содержит в точности то, что необходимо
 	for(auto &p : existingProductVec)
-		if(!((p.ingridCollection & ingrid) ^ ingrid))
+		if(p.ingridCollection == ingrid)
 			return pair<int, int>{p.x, p.y};
 };
 
@@ -321,40 +326,93 @@ void use(pair<int, int> p){
 
 // порезанная клубничка на тарелочке
 void makeChpdStrbr(){
-	/*
-	// если на кухне есть порезанная клубничка, а в руках нет ничего кроме тарелки/пустых рук
-	if(isCoordsValid(getCellWithIngridCollection(CHPD_STRBR))
-	 && me.ingridsInHands <= DISH){
+	if(existStrongly(CHPD_STRBR) || me.haveIngridInHands(CHPD_STRBR))
+	{
+		cerr << "exist strongly CHPD_STRBR / i have in hands" << endl;
+		// если у меня в руках нет порезанной клубнички
+		if(!(me.haveIngridInHands(CHPD_STRBR) && me.haveIngridInHands(DISH)))
+		{
+			cerr << "i have NOT CHPD_STRBR with DISH in handle" << endl;
 
-		// если в руках есть тарелка, то идем за клубничкой
-		if(me.haveIngridInHands(DISH))				use(getCellWithIngridCollection(CHPD_STRBR));
-		// иначе берем тарелку
-		else								use(DISHWASH);
-	}else{
-		// если порезанной клубнички нет...
-
-		// если в руках клубничка, идем ее резать
-		if(me.ingridsInHands == STRBR)	use(CHOP_BOARD);
-		else
-			// если в руках что то есть и это не клубничка, то кладем это на свободныю ячейку стола
-			if(me.ingridsInHands != NONE) use(getFreeTableCoord(me.x, me.y));
-		// если в руках ничего нет, то берем клубничку
-			else							use(STRBR_CREATE);
+			if(me.ingridsInHands > DISH) use(getFreeTableCoord(me.x, me.y)); // если в руках что то кроме тарелки, то выкладываем это на стол
+			else
+				if(me.ingridsInHands == NONE) use(DISHWASH); // если нет тарелки берем тарелку
+				else use(getCellWithIngridStrongly(CHPD_STRBR)); // если тарелка есть берем клубничку
+		}
 	}
-	*/
+	// если порезанной клубнички нет на кухне, делаем клубничку
+	else
+	{
+		// если руки пустые, берем цельную клубничку
+		if(me.ingridsInHands == NONE) use(STRBR_CREATE);
+		// если в руках что то есть
+		else
+		{
+			// если в руках цельная клубничка, режем ее
+			if(me.ingridsInHands == STRBR) use(CHOP_BOARD);
+			// если в руках не цельная клубничка, то ставим это на стол
+			else use(getFreeTableCoord(me.x, me.y));
+		}
+	}
 };
 
+// круасанн на тарелочке
+void makeCroissant(){
+	// если круасанн существует на кухне
+	if(existStrongly(CROISSANT) || me.haveIngridInHands(CROISSANT))
+	{
+		// если у меня в руках нет порезанной клубнички и нет тарелки
+		if(!(me.haveIngridInHands(CROISSANT) && me.haveIngridInHands(DISH)))
+		{
+			cerr << "i have NOT CHPD_STRBR with DISH in handle" << endl;
+
+			if(me.ingridsInHands > DISH) use(getFreeTableCoord(me.x, me.y)); // если в руках что то кроме тарелки, то выкладываем это на стол
+			else
+				if(me.ingridsInHands == NONE) use(DISHWASH); // если нет тарелки берем тарелку
+				else use(getCellWithIngridStrongly(CROISSANT)); // если тарелка есть берем круасанн
+		}
+	}
+	// если круасана нет, делаем круасан
+	else
+	{
+		// если печка занята
+		if(me.ovenReadyTurn != -1){
+
+			// если круасанн готов - забираем
+			if(turnsRemaining < me.ovenReadyTurn){ use(OVEN); me.ovenReadyTurn = -1; } else{ cout << "WAIT" << endl; cerr << "WAITING FOR CROISSANT" << endl; } // если ждем приготовления теста - пропускаем ход
+		}
+		// если печка свободна
+		else
+		{
+			// если руки пустые - берем тесто
+			if(me.ingridsInHands == NONE) use(DOUGH_CREATE);
+			// если в руках тесто, кладем его в печь и запоминаем ход, когда тесто приготовится
+			else
+				if(me.ingridsInHands == DOUGH)
+				{
+					use(OVEN);
+					// если находимся у печки и можем в нее положить тесто
+					if(me.isOvenNear())
+						me.ovenReadyTurn = turnsRemaining - 11;
+				}
+			// если в руках не тесто, то ставим это на стол
+				else use(getFreeTableCoord(me.x, me.y));
+		}
+	}
+};
 
 // круасанн + порезанная клубничка
 void makeCroissantWithChpdStrbr(){
 	// если круасанн существует на кухне
 	if(existStrongly(CROISSANT) || me.haveIngridInHands(CROISSANT))
 	{
+		cerr << "exist strongly CROISSANT / i have in hands" << endl;
 		// если порезанная клубничка существует на кухне
 		if(existStrongly(CHPD_STRBR) || me.haveIngridInHands(CHPD_STRBR))
 		{
+			cerr << "exist strongly CHPD_STRBR / i have in hands" << endl;
 			// если у меня в руках нет порезанной клубнички
-			if(!me.haveIngridInHands(CHPD_STRBR))
+			if(!(me.haveIngridInHands(CHPD_STRBR) && me.haveIngridInHands(DISH)))
 			{
 				cerr << "i have NOT CHPD_STRBR with DISH in handle" << endl;
 
@@ -417,7 +475,6 @@ void makeCroissantWithChpdStrbr(){
 // изготовление заказа по рецепту
 void makeDesiredCollection(){
 
-	//cerr << "me.desiredCollection: " << int(me.desiredCollection) << endl;
 	cerr << "	my current ingrids: " << int(me.ingridsInHands) << endl;
 
 	bool canCook = true;
@@ -429,68 +486,87 @@ void makeDesiredCollection(){
 		// рецепт 1 = мороженка + черничка
 		case(RECIPE1):{
 			cerr << "i cook ICE + BLBR" << endl;
-			cout << "WAIT" << endl;
 
-			//if(me.haveIngridInHands(BLBR))			use(WINDOW);
-			//else if(me.haveIngridInHands(ICE_C))		use(BLBR_CREATE);
-			//else if(me.haveIngridInHands(DISH))		use(ICE_CREATE);
-			//else if(me.ingridsInHands == NONE)		use(DISHWASH);
+			if(me.ingridsInHands == DISH + ICE_C + BLBR)	use(WINDOW);
+			else if(me.ingridsInHands == DISH + ICE_C)		use(BLBR_CREATE);
+			else if(me.ingridsInHands == DISH)				use(ICE_CREATE);
+			else if(me.ingridsInHands == NONE)				use(DISHWASH);
 			break;
 		}
 
 		// рецепт 2 = мороженка + клубничка
 		case(RECIPE2):{
 			cerr << "i cook CHPD_STRBR + ICE" << endl;
-			cout << "WAIT" << endl;
 
-			//if(me.haveIngridInHands(ICE_C))				use(WINDOW);
-			//else if(me.haveIngridInHands(CHPD_STRBR)
-			//	 && me.haveIngridInHands(DISH))			use(ICE_CREATE);
-			//else makeChpdStrbr();
+			if(me.ingridsInHands == DISH + CHPD_STRBR + ICE_C)	use(WINDOW);
+			else if(me.ingridsInHands == DISH + CHPD_STRBR)		use(ICE_CREATE);
+			else makeChpdStrbr();
 			break;
 		}
 
 		// рецепт 3 = клубничка + черничка
 		case(RECIPE3):{
 			cerr << "i cook CHPD_STRBR + BLBR" << endl;
-			cout << "WAIT" << endl;
 
-			//if(me.haveIngridInHands(BLBR))				use(WINDOW);
-			//else if(me.haveIngridInHands(CHPD_STRBR)
-			//	 && me.haveIngridInHands(DISH))			use(BLBR_CREATE);
-			//else makeChpdStrbr();
+			if(me.ingridsInHands == DISH + CHPD_STRBR + BLBR)	use(WINDOW);
+			else if(me.ingridsInHands == DISH + CHPD_STRBR)		use(BLBR_CREATE);
+			else makeChpdStrbr();
 			break;
 		}
 
 		// рецепт 4 = мороженка + черничка + клубничка
 		case(RECIPE4):{
 			cerr << "i cook CHPD_STRBR + ICE_C + BLBR" << endl;
-			cout << "WAIT" << endl;
 
-			//if(me.haveIngridInHands(BLBR))				use(WINDOW);
-			//else if(me.haveIngridInHands(ICE_C))		use(BLBR_CREATE);
-			//else if(me.haveIngridInHands(CHPD_STRBR)
-			//	 && me.haveIngridInHands(DISH))			use(ICE_CREATE);
-			//else makeChpdStrbr();
+			if(me.ingridsInHands == DISH + CHPD_STRBR + ICE_C + BLBR)	use(WINDOW);
+			else if(me.ingridsInHands == DISH + CHPD_STRBR + ICE_C)		use(BLBR_CREATE);
+			else if(me.ingridsInHands == DISH + CHPD_STRBR)				use(ICE_CREATE);
+			else makeChpdStrbr();
 			break;
 		}
 
 		// рецепт 5 = круасанн + мороженое
 		case(RECIPE5):{
 			cerr << "i cook CROISSANT + ICE_C" << endl;
-			cout << "WAIT" << endl;
+
+			if(me.ingridsInHands == DISH + CROISSANT + ICE_C)			use(WINDOW);
+			else if(me.ingridsInHands == DISH + CROISSANT)				use(ICE_CREATE);
+			else makeCroissant();
 			break;
 		}
 
-		// рецепт 6 = круасанн + черничка + мороженое
+		// рецепт 6 = круасанн + черничка
 		case(RECIPE6):{
-			cerr << "i cook CROISSANT + BLBR + ICE_C" << endl;
-			cout << "WAIT" << endl;
+			cerr << "i cook CROISSANT + BLBR" << endl;
+
+			if(me.ingridsInHands == DISH + CROISSANT + BLBR)			use(WINDOW);
+			else if(me.ingridsInHands == DISH + CROISSANT)				use(BLBR_CREATE);
+			else makeCroissant();
 			break;
 		}
 
-		// рецепт 7 = круасанн + клубничка + черничка
+		// рецепт 7 = круасанн + клубничка
 		case(RECIPE7):{
+			cerr << "i cook CROISSANT + ICE_C" << endl;
+
+			if(me.ingridsInHands == DISH + CROISSANT + CHPD_STRBR)		use(WINDOW);
+			else makeCroissantWithChpdStrbr();
+			break;
+		}
+
+		// рецепт 8 = круасанн + черничка + мороженое
+		case(RECIPE8):{
+			cerr << "i cook CROISSANT + BLBR + ICE_C" << endl;
+
+			if(me.ingridsInHands == DISH + CROISSANT + BLBR + ICE_C)	use(WINDOW);
+			else if(me.ingridsInHands == DISH + CROISSANT + BLBR)		use(ICE_CREATE);
+			else if(me.ingridsInHands == DISH + CROISSANT)				use(BLBR_CREATE);
+			else makeCroissant();
+			break;
+		}
+
+		// рецепт 9 = круасанн + клубничка + черничка
+		case(RECIPE9):{
 			cerr << "i cook CROISSANT + CHPD_STRBR + BLBR" << endl;
 
 			if(me.ingridsInHands == DISH + CROISSANT + CHPD_STRBR + BLBR)			use(WINDOW);
@@ -499,8 +575,8 @@ void makeDesiredCollection(){
 			break;
 		}
 
-		// рецепт 8 = круасанн + клубничка + мороженка
-		case(RECIPE8):{
+		// рецепт 10 = круасанн + клубничка + мороженка
+		case(RECIPE10):{
 			cerr << "i cook CROISSANT + CHPD_STRBR + ICE_C + " << endl;
 
 			if(me.ingridsInHands == DISH + CROISSANT + CHPD_STRBR + ICE_C)	use(WINDOW);
@@ -509,8 +585,8 @@ void makeDesiredCollection(){
 			break;
 		}
 
-		// рецепт 9 = круасанн + клубничка + мороженка + черничка
-		case(RECIPE9):{
+		// рецепт 11 = круасанн + клубничка + мороженка + черничка
+		case(RECIPE11):{
 			cerr << "i cook CROISSANT + CHPD_STRBR + ICE_C + BLBR" << endl;
 
 			if(me.ingridsInHands == DISH + CROISSANT + CHPD_STRBR + ICE_C + BLBR)	use(WINDOW);
