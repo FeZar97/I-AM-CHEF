@@ -10,6 +10,7 @@
 #define			HOW_MUCH_STRWBR_PREP	2
 #define			HOW_MUCH_CROIS_PREP		1
 #define			HOW_MUCH_TARTS_PREP		0
+#define			BLOCK_TRESHOLD			2
 
 using namespace std;
 
@@ -43,7 +44,7 @@ enum INGRID{
 	BLBR       = 0x0002,		// черничка
 	ICE_C	   = 0x0004,		// мороженка
 	STRBR	   = 0x0008,		// клубничка
-	CHPD_STRBR = 0x0010,		// разделенная клубничка
+	CHPD_STRBR = 0x0010,		// разделанная клубничка
 	DOUGH	   = 0x0020,		// тесто
 	CROISSANT  = 0x0040,		// круасанн
 	CHPD_DOUGH = 0x0080,		// нарезное тесто
@@ -106,7 +107,6 @@ public:
 		string productString;
 		cin >> x >> y >> productString;
 		ingridCollection = splitProduct2Ingrid(productString);
-		//cerr << "on " << x << " " << y << " exist " << ingrid2String(ingridCollection) << endl;
 	}
 
 	// преобразование строки в коллекцию ингрдиентов
@@ -167,9 +167,8 @@ bool isExistCell(pair<int, int> p){
 	return ( (p.first != -1) && (p.second != -1) && (p.first < K_WIDTH) && (p.second < K_HEIGHT) );
 };
 
-void use(kitchenCellType);
 void use(pair<int,int>);
-void use(string);
+void moveAsTank(pair<int, int>);
 
 int prepChpdStrw, prepCrois, prepTarts;
 
@@ -191,11 +190,16 @@ public:
 	pair<int, int> blbrCell{-1,-1};
 	pair<int, int> iceCell{-1,-1};
 
+	// ближайшая к моему повару свободная ячейка стола
+	pair<int, int> nearFreeCell = {-1, -1};
+
 	// кухня размером 7х11
 	vector<vector<kitchenCellType>> cellArray;
 
-	// массив расстояний до всех мест кухни относительно МОЕГО повара
-	short distArrayForMe[K_HEIGHT][K_WIDTH];
+	short distArrayForMe[K_HEIGHT][K_WIDTH]; // массив расстояний до всех мест кухни относительно МОЕГО повара с учетом существования оппонента
+	short distArrayForWithoutOpponent[K_HEIGHT][K_WIDTH]; // тот же массив растояний, но без учета существования повара напарника
+
+	short distArrayForOpponent[K_HEIGHT][K_WIDTH]; // массив расстояний до всех мест кухни относительно повара НАПАРНИКА с учетом существования оппонента
 
 	// инициализация кухни
 	void initialize(){
@@ -225,7 +229,6 @@ public:
 					case 79: cellArray[i][j] = OVEN;			ovenCell  = {j, i};	break; // O печка
 					default: cellArray[i][j] = SOME_PRODUCT;							   // продукт / пустой стол
 				}
-
 			}
 		}
 	};
@@ -250,14 +253,7 @@ public:
 	// ингридиеты на кухне на конкретной итерации
 	int existingProductNb;
 	vector<PRODUCT> existingProductVec;
-
-	// поиск оборудования
-	pair<int, int> getCellWithAppliance(kitchenCellType desiredCell){
-		for(int i = 0; i < K_HEIGHT; i++)
-			for(int j = 0; j < K_WIDTH; j++)
-				if(cellArray[i][j] == desiredCell) return pair<int, int>{j, i};
-		return pair<int, int>{-1, -1};
-	};
+	short existingProductMap[K_HEIGHT][K_WIDTH]; // массив с готовыми продуктами в виде карты кухни
 
 	// не строгий поиск ингридиентов
 	pair<int, int> getCellWithIngrid(short ingrid){
@@ -279,112 +275,58 @@ public:
 		return pair<int, int>{-1, -1};
 	};
 	
-	// координаты свободного стола, ближайшего к переданным координатам
-	pair<int, int> getNearFreeTable(int x, int y, int oppX, int oppY){
+	// координаты ближайшей свободно столешницы
+	// в приоритете столешницы на центральном столе
+	pair<int, int> getNearFreeTable(){
 
-		// проверяются 8 окружающих клеток
-		for(int i = y - 1; i <= y + 1; i++)
-			for(int j = x - 1; j <= x + 1; j++)
-				// если это стол (возможно с каким то продуктом, оставленным ранее)
-				if(cellArray[i][j] == SOME_PRODUCT){
+		// расстояние до свободной столешницы
+		// увеличивается на 1 до тех пор пока не будет найдена свободная столешница
+		int distToFreeCell = 0;
 
-					bool isTableFree = true;
-					// поиск среди ранее оставленных ингридиентов existingProductVec ячейки i j
-					// если в оставленных ингридиентах такой ячейки нет, то на нее можно что то положить
-					for(auto &ingrs: existingProductVec)
-						if(ingrs.x == j && ingrs.y == i)
-							isTableFree = false;
+		while(true){
 
-					if(isTableFree)
-					{
-						//cerr << "cell " << j << " " << i << " is free" << endl;
+			// проверка центральных столешниц
+			for(int i = 2; i <= 4; i++){
+				for(int j = 2; j <= 8; j++){
+					// если это стол (возможно с каким то продуктом, оставленным ранее)
+					// и расстояние до этой ячейки равно distToFreeCell
+					if(existingProductMap[i][j] == NONE && distArrayForMe[i][j] == distToFreeCell && cellArray[i][j] != EMPTY){
 						return pair<int, int>{j, i};
 					}
 				}
-
-		//cerr << "not exist free cells in area8, find more..." << endl;
-
-		// если дошли до сюда, значит в ближайших 8 клетках от повара нет свободных клеток
-		// надо найти все проходные ячейки вокруг ячейки (x,y) и для каждой из них попытаться найти свободный стол в окружении 8 клеток
-
-		for(int i = y - 1; i <= y + 1; i++)
-			for(int j = x - 1; j <= x + 1; j++)
-			{
-				// если это проходная ячейка и на ней нет напарника
-				// то проверяем все ее окружение
-				if(cellArray[i][j] == EMPTY && !(oppX == j && oppY == i)){
-
-					// проверяются 8 окружающих клеток около найденной свободной клетки
-					for(int k = i - 1; k <= i + 1; k++)
-						for(int l = j - 1; l <= j + 1; l++)
-							// если это стол (возможно с каким то продуктом, оставленным ранее)
-							if(cellArray[k][l] == SOME_PRODUCT){
-
-								bool isTableFree = true;
-								// поиск среди ранее оставленных ингридиентов existingProductVec ячейки i j
-								// если в оставленных ингридиентах такой ячейки нет, то на нее можно что то положить
-								for(auto &ingrs : existingProductVec)
-									if(ingrs.x == l && ingrs.y == k) isTableFree = false;
-
-								if(isTableFree) return pair<int, int>{l, k};
-							}
-				}
 			}
+
+			// проверка периметровых клеток
+
+			// проверка горизонатльных столешниц
+			for(int i = 0; i < K_WIDTH; i++){
+
+				// проверка верхней столешницы
+				if(existingProductMap[0][i] == NONE && distArrayForMe[0][i] == distToFreeCell)
+					return pair<int, int>{i, 0};
+
+				// проверка нижней столешницы
+				else if(existingProductMap[6][i] == NONE && distArrayForMe[6][i] == distToFreeCell)
+					return pair<int, int>{i, 6};
+			}
+
+			// проверка вертикальных столешниц
+			for(int i = 0; i < K_HEIGHT; i++)
+			{
+				// левая
+				if(existingProductMap[i][0] == NONE && distArrayForMe[i][10] == distToFreeCell)
+					return pair<int, int>{0, i};
+
+				// правая
+				else if(existingProductMap[i][10] == NONE && distArrayForMe[i][10] == distToFreeCell)
+					return pair<int, int>{10, i};
+			}
+
+			distToFreeCell++;
+		}
 
 		return pair<int, int>{-1, -1};
 	};
-
-	// если на кухне есть все ингридиенты, возвращает true,
-	// если хотя бы одного ингридиента на кухне нет, то возвращает false
-	bool existAllHardIngrids(short desiredCollection, short ingridsInHands){
-
-		// если по заказу нужен круасанн
-		if(desiredCollection & CROISSANT)
-		{
-			cerr << "нужен круасанн" << endl;
-			// если его нет ни в руках, ни отдельно лежащего и нет тарелки с круассаном(при этом остальные ингридиенты тоже должны подходить)
-			
-			int productWithDishAndCrois = -1;
-
-			// поиск подходящей тарелки с круасанном среди уже существующих продуктов
-			for(int i = 0; i < existingProductNb; i++)
-			{
-				if((existingProductVec[i].ingridCollection & CROISSANT)
-				   && (existingProductVec[i].ingridCollection & DISH)
-				   && (PRODUCT::is1PartOf2(existingProductVec[i].ingridCollection, desiredCollection)))
-				{
-					cerr << "существует тарелка с круасаном и мб еще чем то, подходящим под наш заказ: " << existingProductVec[i].x << " " << existingProductVec[i].y << endl;
-					productWithDishAndCrois = i;
-				}
-			}
-
-			if(!((ingridsInHands & CROISSANT) && (ingridsInHands & DISH)) // в руках нет тарелки с круасаном
-				 && !isExistCell(getCellWithIngridStrongly(CROISSANT)) // нет ячейки кухни с ОТДЕЛЬНЫМ круасаном
-				 && productWithDishAndCrois == -1)// если так и не нашли тарелку с круасаном и еще чем то
-			{
-				return false;
-			}
-		}
-
-		// если (по заказу нужна CHPD_STRBR) а (на кухне ее нет) и (в руках ее нет НА ТАРЕЛКЕ)
-		if( (desiredCollection & CHPD_STRBR) && (!isExistCell(getCellWithIngridStrongly(CHPD_STRBR))) && ( !((ingridsInHands & CHPD_STRBR) && (ingridsInHands & DISH))) )
-		{
-			cerr << "нужна клубничка" << endl;
-			return false;
-		}
-
-		// если по заказу нужен TART а на кухне его нет и в руках его нет НА ТАРЕЛКЕ
-		if((desiredCollection & TART) && (!isExistCell(getCellWithIngridStrongly(TART))) && ( !((ingridsInHands & TART) && (ingridsInHands & DISH))) )
-		{
-			cerr << "нужен торт" << endl;
-			return false;
-		}
-
-		return true;
-	};
-
-	// ближайшая к моему повару свободная ячейка стола
-	pair<int, int> nearFreeCell = {-1, -1};
 
 	// поиск ближайшего ингридиента ingrid
 	pair<int,int> findNearest(short ingrid){
@@ -559,10 +501,12 @@ public:
 	int y;
 	short ingridsInHands; // что несет в руках
 	short desiredCollection = -1; // рецепт, выбранный для приготовления
-
 	short servedClientIdx = -1; // индекс клиента, чей заказ сейчас делает повар
-
 	bool usedOven = false; // использовал ли шеф печку
+	short whatNeedMake = -1;
+
+	int howLongIStateOnPlace = 0; // количество ходов, которое мой повар стоял на месте
+	pair<int, int> previousStateCoords = {-1,-1}; // координаты предыдущего стояния
 
 	void read(){
 		string productString;
@@ -636,7 +580,7 @@ public:
 			if(ingridsInHands != NONE)
 			{
 				cerr << "в руках не тарелка, а нужна тарелка - выклыдваем" << endl;
-				use(kitchen.nearFreeCell);
+				moveAsTank(kitchen.nearFreeCell);
 				return;
 			}
 			else
@@ -646,27 +590,29 @@ public:
 					if(PRODUCT::is1PartOf2(product.ingridCollection, desiredCollection) && !PRODUCT::is1PartOf2(product.ingridCollection, ingridsInHands) && (product.ingridCollection & DISH))
 					{
 						cerr << "есть нужный продукт с тарелкой" << endl;
-						use(pair<int, int>{product.x, product.y});
+						moveAsTank(pair<int, int>{product.x, product.y});
 						return;
 					}
 
 				cerr << "нет ничего подходящего, берем из посудомойки" << endl;
 				// если не нашли в существующих, идем к посудомойке
-				use(DISHWASH);
+				moveAsTank(kitchen.dishCell);
 				return;
 			}
 		}
 		// если тарелка в руках есть, то можем собирать только те продукты, которые без тарелок
 		else
 		{
-			// ищем самый ближайший и идем его брать
+			// надо найти ближайший продукт, нужный по рецепту
 
-			int minDist = 777, minProductIdx = -1;
+			pair<int, int> cellWithClosestProduct{-1,-1};
 
+			// сначала проверяются продукты, уже существующие на кухне
+			int minDist = 999, minProductIdx = -1;
 			for(int i = 0; i < kitchen.existingProductNb; i++)
 			{
-				// если существующий продукт является частью рецепта, ингридиентов из существующего продукта еще нет в руках и продукта не содержит тарелку
-				if((kitchen.existingProductVec[i].ingridCollection & desiredCollection) && !(kitchen.existingProductVec[i].ingridCollection & ingridsInHands) && !(kitchen.existingProductVec[i].ingridCollection & DISH))
+				// если существующий продукт является частью рецепта и его еще нет в руках
+				if( (kitchen.existingProductVec[i].ingridCollection & desiredCollection) && !(kitchen.existingProductVec[i].ingridCollection & ingridsInHands) )
 				{
 					if(kitchen.distArrayForMe[kitchen.existingProductVec[i].y][kitchen.existingProductVec[i].x] < minDist){
 
@@ -675,42 +621,66 @@ public:
 					}
 				}
 			}
-			
+			// если что то нашли - сохраняем
 			if(minProductIdx != -1)
 			{
-				cerr << "есть продукт, являющийся часть рецепта..." << endl;
-				use(pair<int, int>{kitchen.existingProductVec[minProductIdx].x, kitchen.existingProductVec[minProductIdx].y});
-				return;
+				cellWithClosestProduct.first = kitchen.existingProductVec[minProductIdx].x;
+				cellWithClosestProduct.second = kitchen.existingProductVec[minProductIdx].y;
 			}
 
-			/*
-			for(auto &product : kitchen.existingProductVec)
-				// если существующий продукт является частью рецепта, ингридиентов из существующего продукта еще нет в руках и продукта не содержит тарелку
-				if((product.ingridCollection & desiredCollection) && !(product.ingridCollection & ingridsInHands) && !(product.ingridCollection & DISH))
-				{
-					cerr << product.ingridCollection << " " << desiredCollection << " " << ingridsInHands << endl;
-					cerr << "есть продукт, являющийся часть рецепта..." << endl;
-					use(pair<int, int>{product.x, product.y});
-					return;
-				}
-				*/
-		}
-
-		// если дошли до сюда, это означает что осталось взять только ингридиенты со спавнов: черничка/мороженка
-		if((BLBR & desiredCollection) && !(BLBR & ingridsInHands))
-		{
-			cerr << "берем черничку" << endl;
-			use(BLBR_CREATE);
-		}
-		else
-		{
-			if((ICE_C & desiredCollection) && !(ICE_C & ingridsInHands))
+		// затем проверются спавнеры
+			// если нужна мороженка, а в руках ее нет, и расстояние до спавнера мороженки меньше чем до готового продукта, то сохраняем 
+			if(desiredCollection & ICE_C && !(ingridsInHands & ICE_C) && kitchen.distArrayForMe[kitchen.iceCell.second][kitchen.iceCell.first] < minDist)
 			{
-				cerr << "берем мороженку" << endl;
-				use(ICE_CREATE);
+				cellWithClosestProduct = kitchen.iceCell;
+				minDist = kitchen.distArrayForMe[kitchen.iceCell.second][kitchen.iceCell.first];
+			}
+
+			// если нужна черничка, а в руках ее нет,  и расстояние до спавнера чернички меньше чем до готового продукта, то сохраняем 
+			if(desiredCollection & BLBR && !(ingridsInHands & BLBR) && kitchen.distArrayForMe[kitchen.blbrCell.second][kitchen.blbrCell.first] < minDist)
+			{
+				cellWithClosestProduct = kitchen.blbrCell;
+				minDist = kitchen.distArrayForMe[kitchen.blbrCell.second][kitchen.blbrCell.first];
+			}
+			
+			if(isExistCell(cellWithClosestProduct))
+			{
+				cerr << "есть продукт, являющийся часть рецепта..." << endl;
+				moveAsTank(cellWithClosestProduct);
+				return;
 			}
 		}
 	};
+
+	// изменились ли координаты стояния
+	// если после предыдущего хода мои координаты изменились, возвращается true
+	// иначе - false
+	bool isStateCoordsChange(){
+
+		if(x != previousStateCoords.first && y != previousStateCoords.second)
+			return true;
+		else
+			return false;
+	};
+
+	// обновление координат после хода
+	void updateCoords(){
+		
+		// если координаты изменились, то сбрасывается счетчик простаивания
+		// обновляются предыдущие координаты стояния
+		if(isStateCoordsChange()){
+
+			howLongIStateOnPlace = 0;
+			previousStateCoords = pair<int,int>{x, y};
+		}
+		// если координаты не измнились
+		// то инкрементится счетчик простаивания
+		else
+		{
+			howLongIStateOnPlace++;
+		}
+	};
+
 } me, opponent;
 
 // оставшееся кол-во ходов
@@ -725,8 +695,8 @@ int ovenReadyTurn = -1;
 // этот флаг уходит в false только когда сделано требуемое кол-во заготовок
 bool needPrepairing = PREPAIRING_FLAG;
 
-// расчет расстояние от точки моего повара до всех клеток кухни
-void calcDistances(){
+// расчет дистаницй от меня до всех клеток кухни с учетом существование напарника как преграды
+void calcDistancesWithOpponent(){
 
 	// nonChekedCellsNb - количество непроверенных проходных ячеек
 	int i, j, nonChekedCellsNb = 0, k, l;
@@ -754,7 +724,7 @@ void calcDistances(){
 			for(j = 1; j < K_WIDTH - 1; j++)
 				// если находим проходную ячейку, для которой известно расстояние до нее, обновляем значения всех смежных проходных ячеек
 				// ЭТА ЯЧЕЙКА ДОЛЖНА ОТЛИЧАТЬСЯ ОТ ТОЙ ЯЧЕЙКИ, НА КОТОРОЙ СТОИТ ОППОНЕНТ
-				if( (kitchen.distArrayForMe[i][j] < 222) && (kitchen.cellArray[i][j] == EMPTY) )
+				if((kitchen.distArrayForMe[i][j] < 222) && (kitchen.cellArray[i][j] == EMPTY))
 				{
 					//cerr << "(" << j << "," << i << ") = " << kitchen.distArrayForMe[i][j] << endl;
 
@@ -762,7 +732,7 @@ void calcDistances(){
 					// если расстояние до ячейки еще не известно, она проходная и в ней нет оппонента, то обновляем
 
 					// левая
-					if( (kitchen.distArrayForMe[i][j - 1] > 333) && (kitchen.cellArray[i][j - 1] == EMPTY) && !(i == opponent.y && (j - 1) == opponent.x) ){
+					if((kitchen.distArrayForMe[i][j - 1] > 333) && (kitchen.cellArray[i][j - 1] == EMPTY) && !(i == opponent.y && (j - 1) == opponent.x)){
 						kitchen.distArrayForMe[i][j - 1] = kitchen.distArrayForMe[i][j] + 1;
 						nonChekedCellsNb--;
 						//cerr << "	1. (" << j - 1 << "," << i << ") = " << kitchen.distArrayForMe[i][j - 1] << endl;
@@ -783,24 +753,12 @@ void calcDistances(){
 					}
 
 					// нижняя
-					if(kitchen.distArrayForMe[i + 1][j] > 333 && kitchen.cellArray[i + 1][j] == EMPTY && !( (i + 1) == opponent.y && j == opponent.x)){
+					if(kitchen.distArrayForMe[i + 1][j] > 333 && kitchen.cellArray[i + 1][j] == EMPTY && !((i + 1) == opponent.y && j == opponent.x)){
 						kitchen.distArrayForMe[i + 1][j] = kitchen.distArrayForMe[i][j] + 1;
 						nonChekedCellsNb--;
 						//cerr << "	4. (" << j << "," << i + 1 << ") = " << kitchen.distArrayForMe[i + 1][j] << endl;
 					}
 				}
-		/*
-		cerr << "расстояния до проходных ячеек:" << endl;
-		for(i = 0; i < K_HEIGHT; i++)
-		{
-			for(j = 0; j < K_WIDTH; j++)
-			{
-				cerr.width(4);
-				cerr << kitchen.distArrayForMe[i][j] << " ";
-			}
-			cerr << endl;
-		}
-		*/
 		counter--;
 	}
 
@@ -848,6 +806,215 @@ void calcDistances(){
 		cerr << endl;
 	}
 	*/
+};
+
+// расчет дистаницй от меня до всех клеток кухни БЕЗ учета напарника
+void calcDistancesWithoutOpponent(){
+
+	// nonChekedCellsNb - количество непроверенных проходных ячеек
+	int i, j, k, l;
+
+	// начальная инициализация 777
+	for(i = 0; i < K_HEIGHT; i++)
+		for(j = 0; j < K_WIDTH; j++)
+			kitchen.distArrayForWithoutOpponent[i][j] = 777;
+
+	// ячейка со мной - проходная, расстояние == 0
+	kitchen.distArrayForWithoutOpponent[me.y][me.x] = 0;
+
+	// ПО ВСЕМ ПРОХОДНЫМ ЯЧЕЙКАМ
+	// пока на полу есть проходные ячейки с неизвестной дистанцией
+	int counter = 21;
+	//while(nonChekedCellsNb > 1)
+	while(counter > 0)
+	{
+		for(i = 1; i < K_HEIGHT - 1; i++)
+			for(j = 1; j < K_WIDTH - 1; j++)
+				// если находим проходную ячейку, для которой известно расстояние до нее, обновляем значения всех смежных проходных ячеек
+				// ЭТА ЯЧЕЙКА ДОЛЖНА ОТЛИЧАТЬСЯ ОТ ТОЙ ЯЧЕЙКИ, НА КОТОРОЙ СТОИТ ОППОНЕНТ
+				if((kitchen.distArrayForWithoutOpponent[i][j] < 222) && (kitchen.cellArray[i][j] == EMPTY))
+				{
+					// обновляются только смежные4 ячейки
+					// если расстояние до ячейки еще не известно и она проходная, то обновляем
+
+					// левая
+					if( kitchen.distArrayForWithoutOpponent[i][j - 1] > 333 && kitchen.cellArray[i][j - 1] == EMPTY )
+						kitchen.distArrayForWithoutOpponent[i][j - 1] = kitchen.distArrayForWithoutOpponent[i][j] + 1;
+
+					// правая
+					if( kitchen.distArrayForWithoutOpponent[i][j + 1] > 333 && kitchen.cellArray[i][j + 1] == EMPTY )
+						kitchen.distArrayForWithoutOpponent[i][j + 1] = kitchen.distArrayForWithoutOpponent[i][j] + 1;
+
+					// верхняя
+					if( kitchen.distArrayForWithoutOpponent[i - 1][j] > 333 && kitchen.cellArray[i - 1][j] == EMPTY )
+						kitchen.distArrayForWithoutOpponent[i - 1][j] = kitchen.distArrayForWithoutOpponent[i][j] + 1;
+
+					// нижняя
+					if( kitchen.distArrayForWithoutOpponent[i + 1][j] > 333 && kitchen.cellArray[i + 1][j] == EMPTY )
+						kitchen.distArrayForWithoutOpponent[i + 1][j] = kitchen.distArrayForWithoutOpponent[i][j] + 1;
+				}
+		counter--;
+	}
+
+	// обновление расстояние до всех ячеек стола
+	// проходим по всем ячейкам кухни и если ячейка не проходная, то расстоние до нее == минимальному из смежных8 проходных
+	for(i = 0; i < K_HEIGHT; i++)
+		for(j = 0; j < K_WIDTH; j++)
+			// если это ячейка стола
+			if(kitchen.cellArray[i][j] != EMPTY){
+
+				int minDist = 777;
+
+				// проверяем смежные8
+				// ищем ПРОХОДНЫЕ с минимальным расстоянием
+				for(k = i - 1; k <= i + 1; k++)
+					for(l = j - 1; l <= j + 1; l++)
+						// проверка на валидность
+						if(isExistCell(pair<int, int>{l, k}))
+						{
+							// если это проходная ячейка и расстояние до нее меньше минимума, то сохраняем это расстояние как новым минимум
+							if(kitchen.cellArray[k][l] == EMPTY && kitchen.distArrayForWithoutOpponent[k][l] < minDist && kitchen.distArrayForWithoutOpponent[k][l] != -1)
+							{
+								minDist = kitchen.distArrayForWithoutOpponent[k][l];
+							}
+						}
+
+				//cerr << " dist to " << j << " " << i << " = " << minDist << endl;
+
+				// этой ячейка стола присваивается минимальное проходное расстояние
+				kitchen.distArrayForWithoutOpponent[i][j] = minDist;
+			}
+	/*
+	cerr << "РАССТОЯНИЯ БЕЗ УЧЕТА ОППОНЕНТА:" << endl;
+	for(i = 0; i < K_HEIGHT; i++)
+	{
+		for(j = 0; j < K_WIDTH; j++)
+		{
+			cerr.width(3);
+			cerr << kitchen.distArrayForWithoutOpponent[i][j] << " ";
+		}
+		cerr << endl;
+	}
+	*/
+};
+
+// расчет расстояния для оппонента
+void calcOpponentDistances(){
+
+	// nonChekedCellsNb - количество непроверенных проходных ячеек
+	int i, j, nonChekedCellsNb = 0, k, l;
+
+	// количество проходных ячеек, до которых надо найти расстояния
+	nonChekedCellsNb = 29;
+
+	// начальная инициализация 777
+	for(i = 0; i < K_HEIGHT; i++)
+		for(j = 0; j < K_WIDTH; j++)
+			kitchen.distArrayForOpponent[i][j] = 777;
+
+	// ячейка со мной - проходная, расстояние == 0
+	kitchen.distArrayForOpponent[opponent.y][opponent.x] = 0;
+
+	// ПО ВСЕМ ПРОХОДНЫМ ЯЧЕЙКАМ
+	// пока на полу есть проходные ячейки с неизвестной дистанцией
+	int counter = 22;
+	//while(nonChekedCellsNb > 1)
+	while(counter > 0)
+	{
+		for(i = 1; i < K_HEIGHT - 1; i++)
+			for(j = 1; j < K_WIDTH - 1; j++)
+				// если находим проходную ячейку, для которой известно расстояние до нее, обновляем значения всех смежных проходных ячеек
+				// ЭТА ЯЧЕЙКА ДОЛЖНА ОТЛИЧАТЬСЯ ОТ ТОЙ ЯЧЕЙКИ, НА КОТОРОЙ СТОИТ ОППОНЕНТ
+				if((kitchen.distArrayForOpponent[i][j] < 222) && (kitchen.cellArray[i][j] == EMPTY))
+				{
+					//cerr << "(" << j << "," << i << ") = " << kitchen.distArrayForMe[i][j] << endl;
+
+					// обновляются только смежные4 ячейки
+					// если расстояние до ячейки еще не известно, она проходная и в ней нет оппонента, то обновляем
+
+					// левая
+					if((kitchen.distArrayForOpponent[i][j - 1] > 333) && (kitchen.cellArray[i][j - 1] == EMPTY) && !(i == me.y && (j - 1) == me.x)){
+						kitchen.distArrayForOpponent[i][j - 1] = kitchen.distArrayForOpponent[i][j] + 1;
+						nonChekedCellsNb--;
+						//cerr << "	1. (" << j - 1 << "," << i << ") = " << kitchen.distArrayForMe[i][j - 1] << endl;
+					}
+
+					// правая
+					if(kitchen.distArrayForOpponent[i][j + 1] > 333 && kitchen.cellArray[i][j + 1] == EMPTY && !(i == me.y && (j + 1) == me.x)){
+						kitchen.distArrayForOpponent[i][j + 1] = kitchen.distArrayForOpponent[i][j] + 1;
+						nonChekedCellsNb--;
+						//cerr << "	2. (" << j + 1 << "," << i << ") = " << kitchen.distArrayForMe[i][j + 1] << endl;
+					}
+
+					// верхняя
+					if(kitchen.distArrayForOpponent[i - 1][j] > 333 && kitchen.cellArray[i - 1][j] == EMPTY && !((i - 1) == me.y && j == me.x)){
+						kitchen.distArrayForOpponent[i - 1][j] = kitchen.distArrayForOpponent[i][j] + 1;
+						nonChekedCellsNb--;
+						//cerr << "	3. (" << j << "," << i - 1 << ") = " << kitchen.distArrayForMe[i - 1][j] << endl;
+					}
+
+					// нижняя
+					if(kitchen.distArrayForOpponent[i + 1][j] > 333 && kitchen.cellArray[i + 1][j] == EMPTY && !((i + 1) == me.y && j == me.x)){
+						kitchen.distArrayForOpponent[i + 1][j] = kitchen.distArrayForOpponent[i][j] + 1;
+						nonChekedCellsNb--;
+						//cerr << "	4. (" << j << "," << i + 1 << ") = " << kitchen.distArrayForMe[i + 1][j] << endl;
+					}
+				}
+		counter--;
+	}
+
+	// обновление расстояние до всех ячеек стола
+	// проходим по всем ячейкам кухни и если ячейка не проходная, то расстоние до нее == минимальному из смежных8 проходных
+	for(i = 0; i < K_HEIGHT; i++)
+		for(j = 0; j < K_WIDTH; j++)
+			// если это ячейка стола
+			if(kitchen.cellArray[i][j] != EMPTY){
+
+				//cerr << endl << "check coord " << j << " " << i << endl;
+
+				int minDist = 777;
+
+				// проверяем смежные8
+				// ищем ПРОХОДНЫЕ с минимальным расстоянием
+				for(k = i - 1; k <= i + 1; k++)
+					for(l = j - 1; l <= j + 1; l++)
+						// проверка на валидность
+						if(isExistCell(pair<int, int>{l, k}))
+						{
+							// если это проходная ячейка и расстояние до нее меньше минимума, то сохраняем это расстояние как новым минимум
+							if(kitchen.cellArray[k][l] == EMPTY && kitchen.distArrayForOpponent[k][l] < minDist && kitchen.distArrayForOpponent[k][l] != -1)
+							{
+								minDist = kitchen.distArrayForOpponent[k][l];
+								//cerr << "	coord " << l << " " << k << " is empty" << endl;
+							}
+						}
+
+				//cerr << " dist to " << j << " " << i << " = " << minDist << endl;
+
+				// этой ячейка стола присваивается минимальное проходное расстояние
+				kitchen.distArrayForOpponent[i][j] = minDist;
+			}
+
+	/*
+	cerr << "РАССТОЯНИЯ:" << endl;
+	for(i = 0; i < K_HEIGHT; i++)
+	{
+		for(j = 0; j < K_WIDTH; j++)
+		{
+			cerr.width(3);
+			cerr << kitchen.distArrayForMe[i][j] << " ";
+		}
+		cerr << endl;
+	}
+	*/
+};
+
+// расчет расстояние от точки моего повара до всех клеток кухни
+void calcDistances(){
+
+	calcDistancesWithOpponent();
+	calcDistancesWithoutOpponent();
+	calcOpponentDistances();
 };
 
 // возвращает индекс наиболее вероятного заказа, который делает напрник
@@ -909,8 +1076,14 @@ void readInput(){
 	// если раунд только начался, готовим заготовки
 	if(turnsRemaining == 200 || turnsRemaining == 199 || turnsRemaining == 198){
 
+		cerr << "НАЧАЛСЯ НОВЫЙ РАУНД" << endl;
+
 		needPrepairing = PREPAIRING_FLAG;
+
 		me.usedOven = false;
+		me.desiredCollection = -1;
+		me.servedClientIdx = -1;
+
 		prepChpdStrw = 0;
 		prepCrois = 0;
 		prepTarts = 0;
@@ -922,11 +1095,29 @@ void readInput(){
 	me.read();
 	opponent.read();
 
+	// сброс карты существующих продуктов
+	for(int i = 0; i < K_HEIGHT; i++)
+		for(int j = 0; j < K_WIDTH; j++)
+			kitchen.existingProductMap[i][j] = NONE;
+	// спавнеры добавляются к мапе
+	kitchen.existingProductMap[kitchen.iceCell.second][kitchen.iceCell.first]     = ICE_C;
+	kitchen.existingProductMap[kitchen.dishCell.second][kitchen.dishCell.first]   = DISH;
+	kitchen.existingProductMap[kitchen.doughCell.second][kitchen.doughCell.first] = DOUGH;
+	kitchen.existingProductMap[kitchen.strbrCell.second][kitchen.strbrCell.first] = STRBR;
+	kitchen.existingProductMap[kitchen.blbrCell.second][kitchen.blbrCell.first]   = BLBR;
+	kitchen.existingProductMap[kitchen.ovenCell.second][kitchen.ovenCell.first]   = -1;
+	kitchen.existingProductMap[kitchen.chopCell.second][kitchen.chopCell.first]   = -1;
+	kitchen.existingProductMap[kitchen.winCell.second][kitchen.winCell.first]	  = -1;
+
+
 	// существующие готовые ингридиенты на кухне
 	cin >> kitchen.existingProductNb;
 	kitchen.existingProductVec.clear();
 	kitchen.existingProductVec.resize(kitchen.existingProductNb);
-	for(auto &prod: kitchen.existingProductVec) prod.readInput();
+	for(auto &prod : kitchen.existingProductVec){
+		prod.readInput();
+		kitchen.existingProductMap[prod.y][prod.x] = prod.ingridCollection;
+	}
 
 	// все про печку
 	string ingridInOven;
@@ -943,72 +1134,523 @@ void readInput(){
 	estimateOpponentOrderIdx();
 
 	// ближайшая свободноя чейка со столом
-	kitchen.nearFreeCell = kitchen.getNearFreeTable(me.x, me.y, opponent.x, opponent.y);
-};
+	kitchen.nearFreeCell = kitchen.getNearFreeTable();
 
-// использование нужного приспособления
-void use(kitchenCellType cellType){
+	me.updateCoords();
+	opponent.updateCoords();
 
-	pair<int, int> cellWithAppliance = kitchen.getCellWithAppliance(cellType);
-	if(isExistCell(cellWithAppliance)){
-		cout << "USE " << cellWithAppliance.first << " " << cellWithAppliance.second << "; " + get_random_spell() << endl;
-		cerr << "USE " << kitchen.cell2String(cellType) << endl;
-	}
+	//cerr << "ближайшая свободная ячейка: " << kitchen.nearFreeCell.first << " " << kitchen.nearFreeCell.second << endl;
 };
 
 // использование нужного продукта
 void use(pair<int, int> p){
 	if(isExistCell(p)){
-		cout << "USE " << p.first << " " << p.second << + "; " + get_random_spell() << endl;
+		cout << "USE " << p.first << " " << p.second << + "; " + get_random_spell() << + ";" << endl;
 		cerr << "USE PAIR " << p.first << " " << p.second << endl;
 	}
 };
 
-void use(string command){
-	cout << command + "; " + get_random_spell() << endl;
-	cerr << command << endl;
+// движение в указанную точку
+// если расстояние по кратчайшему пути <= 6, то проще заблокировать напарника и идти напролом, чем обходить всю кухню
+void moveAsTank(pair<int, int> p)
+{
+	// если расстояние с учетом напарника равно расстоянию без учета напарника, то он не мешает и можно идти обычным юзом
+	if(kitchen.distArrayForMe[p.second][p.first] == kitchen.distArrayForWithoutOpponent[p.second][p.first])
+	{
+		use(p);
+	}
+	// меньше быть не может
+	// следовательно этот случай выполняется, когда расстояние с учетом напарника БОЛЬШЕ расстояния без учета напарника
+	else
+	{
+		// движение напролом только если расстояние <= 8 и напарник не у печки
+		if(kitchen.distArrayForWithoutOpponent[p.second][p.first] <= 8 && !opponent.isOvenNear() && opponent.howLongIStateOnPlace < BLOCK_TRESHOLD)
+		{
+			cerr << "выгоднее идти напролом" << endl;
+
+			// надо определить координаты клетки пола, в которую я могу перейти, чтобы скоратить расстояние до конечной цели
+
+			// сначала определяются две клетки пола сбоку от напарника
+			// из этих двух клеток выбирается клетка, расстояние до которой минимально и делается мув в эту клетку
+
+			pair<int, int> point{-1,-1};
+			int minDist = 777;
+
+			for(int i = 0; i < K_HEIGHT; i++)
+				for(int j = 0; j < K_WIDTH; j++)
+					// если это клетка пола и расстояние до этой клетки меньше минимума
+					if(kitchen.cellArray[i][j] == EMPTY && kitchen.distArrayForMe[i][j] < minDist)
+					{
+						//cerr << "клетка " << j << " " << i << " имеет расстояние " << kitchen.distArrayForMe[i][j] << endl;
+
+						// если это верхняя либо нижняя клетка
+						if( ((i == opponent.y - 1) && (j == opponent.x)) || ((i == opponent.y + 1) && (j == opponent.x))
+						   // если левая или правая
+						 || ((i == opponent.y) && (j == opponent.x - 1)) || ((i == opponent.y) && (j == opponent.x + 1)) )
+						{
+							point = pair<int, int>{j, i};
+							minDist = kitchen.distArrayForMe[i][j];
+						}
+					}
+			cerr << "движение напролом в клетку " << point.first << " " << point.second << endl;
+			cout << "MOVE " << point.first << " " << point.second << endl;
+		}
+		// если расстояние > 8 или напарник у печки, то лучше идти в обход
+		else
+		{
+			use(p);
+		}
+	}
+};
+
+// если в руках  ингридиент, то возможно есть тарелка, куда его можно положить
+// если в руках неготовый ингридиент, надо его приготовить, но только если приспособление рядом
+void findWherePut(short ingrid){
+
+	cerr << "ищу куда деть ингридиент из рук..." << endl;
+
+	switch(ingrid){
+
+		// если в руках готовый торт, то надо найти тарелку с чем то, к которой можно добавить торт
+		// при этом суммарное содержимое тарелки должно будет удовлетворять одному из существующих заказов
+		case TART:
+		{
+			// сброс флага надобности 
+			if(me.whatNeedMake == TART)
+				me.whatNeedMake = -1;
+
+			// индекс существующей тарелки, если в итоге он будет равен -1, то надо просто выложить торт рядом
+			int existingDishWhereCanPutTort = -1,
+				minDist = 666;
+
+			// среди всех существующих продуктов ищется тарелка, к которой можно добавить торт
+			for(int i = 0; i < kitchen.existingProductNb; i++){
+
+				if(kitchen.existingProductVec[i].ingridCollection & DISH // если это продукт с тарелкой
+					&& !(kitchen.existingProductVec[i].ingridCollection & TART) // если тарелка не содержит торт
+					&& (
+						PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | TART), clients.curClientVec[0].ingridCollection) // эта тарелка с тортом будет подходить для 0-го заказа
+						|| PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | TART), clients.curClientVec[1].ingridCollection) // эта тарелка с тортом будет подходить для 1-го заказа
+						|| PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | TART), clients.curClientVec[2].ingridCollection) // эта тарелка с тортом будет подходить для 2-го заказа
+						)
+					&& kitchen.distArrayForMe[kitchen.existingProductVec[i].y][kitchen.existingProductVec[i].x] < minDist
+				   )
+				{
+					existingDishWhereCanPutTort = i;
+					minDist = kitchen.distArrayForMe[kitchen.existingProductVec[i].y][kitchen.existingProductVec[i].x];
+				}
+			}
+
+			// если подходящая тарелка найдена - используем ее
+			if(existingDishWhereCanPutTort != -1)
+			{
+				cerr << "	существует тарелка, в которую можно положить готовый торт, иду к ней" << endl;
+				moveAsTank(pair<int, int>{kitchen.existingProductVec[existingDishWhereCanPutTort].x, kitchen.existingProductVec[existingDishWhereCanPutTort].y});
+			}
+			// если такой тарелки нет, то кладем на ближайший свободный стол
+			else
+			{
+				cerr << "	не существует тарелки, в которую можно положить готовый торт, кладу на свободный стол" << endl;
+				moveAsTank(kitchen.nearFreeCell);
+			}
+
+			break;
+		}
+
+		// если в руках готовый круасанн, то надо найти тарелку с чем то, к которой можно добавить круасанн
+		// при этом суммарное содержимое тарелки должно будет удовлетворять одному из существующих заказов
+		case CROISSANT:
+		{
+			// сброс флага надобности 
+			if(me.whatNeedMake == CROISSANT)
+				me.whatNeedMake = -1;
+
+			// индекс существующей тарелки, если в итоге он будет равен -1, то надо просто выложить круасанн рядом
+			int existingDishWhereCanPutCroissant = -1;
+
+			// среди всех существующих продуктов ищется тарелка, к которой можно добавить круасанн
+			for(int i = 0; i < kitchen.existingProductNb; i++){
+
+				if(		 kitchen.existingProductVec[i].ingridCollection & DISH // если это продукт с тарелкой
+					&& !(kitchen.existingProductVec[i].ingridCollection & CROISSANT) // если тарелка не содержит круасанн
+					&& (
+						   PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | CROISSANT), clients.curClientVec[0].ingridCollection) // эта тарелка с круасанном будет подходить для 0-го заказа
+						|| PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | CROISSANT), clients.curClientVec[1].ingridCollection) // эта тарелка с круасанном будет подходить для 1-го заказа
+						|| PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | CROISSANT), clients.curClientVec[2].ingridCollection) // эта тарелка с круасанном будет подходить для 2-го заказа
+						)
+				   )
+					existingDishWhereCanPutCroissant = i;
+			}
+
+			// если подходящая тарелка найдена - используем ее
+			if(existingDishWhereCanPutCroissant != -1)
+			{
+				cerr << "	существует тарелка, в которую можно положить готовый круасанн, иду к ней" << endl;
+				moveAsTank(pair<int, int>{kitchen.existingProductVec[existingDishWhereCanPutCroissant].x, kitchen.existingProductVec[existingDishWhereCanPutCroissant].y});
+			}
+			// если такой тарелки нет, то кладем на ближайший свободный стол
+			else
+			{
+				cerr << "	не существует тарелки, в которую можно положить готовый круасанн, кладу на свободный стол" << endl;
+				moveAsTank(kitchen.nearFreeCell);
+			}
+
+			break;
+		}
+	
+		// если в руках порезанная клубничка, то надо найти тарелку с чем то, к которой можно добавить порезанную клубничку
+		// при этом суммарное содержимое тарелки должно будет удовлетворять одному из существующих заказов
+		case CHPD_STRBR:
+		{
+			// сброс флага надобности 
+			if(me.whatNeedMake == CHPD_STRBR)
+				me.whatNeedMake = -1;
+
+			// индекс существующей тарелки, если в итоге он будет равен -1, то надо просто выложить порезанную клубничку рядом
+			int existingDishWhereCanPutChpdStrbr = -1,
+				minAward = 0;
+
+			// среди всех существующих продуктов ищется тарелка, к которой можно добавить порезанную клубничку
+			for(int i = 0; i < kitchen.existingProductNb; i++){
+
+				// если это продукт с тарелкой и тарелка не содержит порезанную клубничку
+				if(kitchen.existingProductVec[i].ingridCollection & DISH && !(kitchen.existingProductVec[i].ingridCollection & CHPD_STRBR))
+				{
+					// надо проверить, будет ли тарелка с порезанной клубничкой удовлетворять какому либо заказу
+					for(int j = 0; j < clients.curClientNb; j++)
+					{
+						// если тарелка с порезанной клубничкой будет подходить для j-го заказа, запоминаем
+						if(   PRODUCT::is1PartOf2((kitchen.existingProductVec[i].ingridCollection | CHPD_STRBR), clients.curClientVec[j].ingridCollection)
+						   && kitchen.existingProductVec[i].ingridCollection > minAward) // ценность заказа
+						{
+							existingDishWhereCanPutChpdStrbr = i;
+							minAward = kitchen.existingProductVec[i].ingridCollection;
+						}
+					}
+				}
+						   
+			}
+
+			// если подходящая тарелка найдена - используем ее
+			if(existingDishWhereCanPutChpdStrbr != -1)
+			{
+				cerr << "	существует тарелка, в которую можно положить порезанную клубничку, иду к ней" << endl;
+				moveAsTank(pair<int, int>{kitchen.existingProductVec[existingDishWhereCanPutChpdStrbr].x, kitchen.existingProductVec[existingDishWhereCanPutChpdStrbr].y});
+			}
+			// если такой тарелки нет, то кладем на ближайший свободный стол
+			else
+			{
+				cerr << "	не существует тарелки, в которую можно положить порезанную клубничку, кладу на свободный стол" << endl;
+				moveAsTank(kitchen.nearFreeCell);
+			}
+
+			break;
+		}
+	
+		// если в руках клубничка, то ее надо либо порезать, либо положить на свободный стол
+		// если разделочная доска в пределгах досягаемости за 1 ход, то идем резать
+		// иначе - кладем на свободный стол
+		case STRBR:
+		{
+			if(kitchen.distArrayForMe[kitchen.chopCell.second][kitchen.chopCell.first] <= 4)
+				moveAsTank(kitchen.chopCell);
+			else
+				moveAsTank(kitchen.nearFreeCell);
+			break;
+		}
+
+		// если в руках тесто, то надо выяснить что нужнее: торт или круасанн
+		// надо посмотреть заказ, который сечас выполняет мой повар
+		// если по заказу нужен торт, а на кухне нет отдельного торта / торта на тарелке, то надо готовить торт
+		// если по заказу нужен круасанн, а на кухне нет отдельного круасана / круасана на тарелке, то надо готовить круасанн
+		case DOUGH:
+		{
+
+			// в зависимости от того, что сейчас нужно делать из теста
+			switch(me.whatNeedMake){
+
+				// если нужен торт - несем тесто на резку
+				case TART:
+					moveAsTank(kitchen.chopCell);
+					break;
+
+				// если нужен круасанн - несем тесто в духовку
+				case CROISSANT:
+
+					// если мы стоим рядом с печкой
+					if(me.isOvenNear())
+					{
+						// если печка свободна - заклыдваем в нее выпечку и помечаем, что печка нами используется
+						if(kitchen.ovenContents == NONE)
+						{
+							me.usedOven = true;
+							moveAsTank(kitchen.ovenCell);
+						}
+						// если в печке что то есть, то надо выложить торт из рук и забрать содержимое печки
+						else
+						{
+							moveAsTank(kitchen.nearFreeCell);
+						}
+					}
+					// если не у печки - идем к печке
+					else
+					{
+						moveAsTank(kitchen.ovenCell);
+					}
+
+					break;
+
+				// если тесто не нужно ни для чего, то выкладываем его рядом
+				default:
+					moveAsTank(kitchen.nearFreeCell);
+			}
+
+			break;
+		}
+
+		// если в рубленое тесто и черничка в пределах одного хода
+		// то заправляем тесто
+		// если черничка далеко - выбрасываем рубленое тесто
+		case CHPD_DOUGH:
+		{
+			// в зависимости от того, что сейчас нужно делать из теста
+			switch(me.whatNeedMake){
+
+				// если нужен торт - несем пирог на запрвка
+				case TART:
+					moveAsTank(kitchen.blbrCell);
+					break;
+
+				// если торт не нужен, то нет смысла сюсюкаться с этим пирогом, выбрасываем
+				default:
+					moveAsTank(kitchen.nearFreeCell);
+			}
+
+			break;
+		}
+
+		// если в руках сырой пирог
+		case RAW_TART:
+		{
+			// в зависимости от того, что сейчас нужно делать из теста
+			switch(me.whatNeedMake){
+
+				// если нужен торт - несем пирог на заправку
+				case TART:
+
+					// если мы стоим рядом с печкой
+					if(me.isOvenNear())
+					{
+						// если печка свободна - заклыдваем в нее выпечку и помечаем, что печка нами используется
+						if(kitchen.ovenContents == NONE)
+						{
+							me.usedOven = true;
+							moveAsTank(kitchen.ovenCell);
+						}
+						// если в печке что то есть, то надо выложить торт из рук и забрать содержимое печки
+						else
+						{
+							moveAsTank(kitchen.nearFreeCell);
+						}
+					}
+					// если не у печки - идем к печке
+					else
+					{
+						moveAsTank(kitchen.ovenCell);
+					}
+
+					break;
+
+				// если торт не нужен, то нет смысла сюсюкаться с этим пирогом, выбрасываем
+				default:
+					moveAsTank(kitchen.nearFreeCell);
+			}
+
+			break;
+		}
+
+		case DISH:
+		{
+			if(kitchen.ovenContents != NONE)
+				use(kitchen.ovenCell);
+			else
+				moveAsTank(kitchen.nearFreeCell);
+
+			break;
+		}
+
+		default:
+			// если в руках тарелка с чем то, то надо ее максимально укомплектовать
+			if(ingrid > DISH)
+			{
+
+				cerr << "в руках тарелка с чем то, пробуем немного собрать заказ" << endl;
+
+				// если по заказу нужен круасан/торт/клубничка, а в руках есть тарелка но нет какого то из этих ингридиентов, то надо поискать на кухне какие то ингридиенты
+				pair<int, int>  cellWithTart      = kitchen.findNearest(TART),
+								cellWithCroissant = kitchen.findNearest(CROISSANT),
+								cellWithChpdStrbr = kitchen.findNearest(CHPD_STRBR);
+
+				// если по заказу торт нужен, на тарелке его нет и есть ячейка с тортом, то идем его брать
+				if(me.desiredCollection & TART && !(ingrid & TART) && isExistCell(cellWithTart))
+				{
+					cerr << "	можно добавить на тарелку торт" << endl;
+					moveAsTank(cellWithTart);
+				}
+				// если по заказу круасанн нужен, на тарелке его нет и есть ячейка с круасанном, то идем его брать
+				else if(me.desiredCollection & CROISSANT && !(ingrid & CROISSANT) && isExistCell(cellWithCroissant))
+				{
+					cerr << "	можно добавить на тарелку круасанн" << endl;
+					moveAsTank(cellWithCroissant);
+				}
+				// если по заказу порезанная клубничка нужна, на тарелке ее нет и есть ячейка с порезанной клубничкой, то идем ее брать
+				else if(me.desiredCollection & CHPD_STRBR && !(ingrid & CHPD_STRBR) && isExistCell(cellWithChpdStrbr))
+				{
+					cerr << "	можно добавить на тарелку порезанную клубничку" << endl;
+					moveAsTank(cellWithChpdStrbr);
+				}
+				// если в печке есть готовая выпечка, которую можно добавить на тарелку
+				else if(kitchen.ovenContents == CROISSANT || kitchen.ovenContents == TART){
+
+					// если на тарелке еще нет содержимого печки и если содержимое тареки с содержиммым печки подойдет под один из заказов, то берем содержимое печки и меняем заказ
+					if(   !(me.ingridsInHands & kitchen.ovenContents)
+						&& (   PRODUCT::is1PartOf2(me.ingridsInHands | kitchen.ovenContents, clients.curClientVec[0].ingridCollection)
+							|| PRODUCT::is1PartOf2(me.ingridsInHands | kitchen.ovenContents, clients.curClientVec[1].ingridCollection)
+							|| PRODUCT::is1PartOf2(me.ingridsInHands | kitchen.ovenContents, clients.curClientVec[2].ingridCollection)
+						   )
+					   )
+					{
+						moveAsTank(kitchen.ovenCell);
+					}
+					// если в руках уже есть содержимое печки, то надо выложить это из рук и забрать готовую выпечку из печки
+					else
+					{
+						cerr << "		в печке готовая выпечка, не могу ее добавить на свою тарелку, кладу тарелку на стол" << endl;
+						moveAsTank(kitchen.nearFreeCell);
+					}
+				}
+				// если и в печке нет ничего готового, и нет ни одного готового ингридиента, который можно было бы добавить к тарелке, то выкладываем на стол
+				else
+				{
+					cerr << "	к тарелке нечего добавить, кладу ее на стол" << endl;
+					moveAsTank(kitchen.nearFreeCell);
+				}
+			}
+			else
+			{
+				moveAsTank(kitchen.nearFreeCell);
+			}
+	}
+};
+
+// попытка спасти выпечку
+// если начинаем спасение возвращает true
+// если не будет спасения, то возвращает false
+bool saveBaking(){
+
+	// если в духовке готовый продукт, созданный по моей инициативе, то достаем его
+	if( (kitchen.ovenContents == TART || kitchen.ovenContents == CROISSANT) )
+	{
+		// если расстояние до печки позволяет успеть забрать выпечку
+		if( kitchen.distArrayForMe[kitchen.ovenCell.second][kitchen.ovenCell.first] <= (kitchen.ovenTimer / 2 - 1) * 4 )
+		{
+			cerr << "		в духовке есть готовая выпечка, расстояние позволяет ее забрать" << endl;
+
+			// если напарник далеко от духовки ИЛИ ЕСЛИ ОН В АУТЕ, то надо забрать
+			if(kitchen.distArrayForOpponent[kitchen.ovenCell.second][kitchen.ovenCell.first] > 4 || opponent.howLongIStateOnPlace > 5)
+			{
+				cerr << "			напарник далеко от духовки, надо забрать" << endl;
+
+				// если печка рядом
+				if(me.isOvenNear())
+				{
+					cerr << "			духовка рядом, пытаюсь забрать выпечку" << endl;
+
+					// если можем забрать - забираем
+					if(me.ingridsInHands == NONE // если руки пустые
+					   // либо если в руках есть тарелка, на которой нет содержимого духовки, и при добавлении содержимого духовки на тарелку общее блюдо удовлетворит одного из клиентов
+					   || (!(me.ingridsInHands & kitchen.ovenContents)
+						   && (PRODUCT::is1PartOf2(me.ingridsInHands | kitchen.ovenContents, clients.curClientVec[0].ingridCollection)
+							   || PRODUCT::is1PartOf2(me.ingridsInHands | kitchen.ovenContents, clients.curClientVec[1].ingridCollection)
+							   || PRODUCT::is1PartOf2(me.ingridsInHands | kitchen.ovenContents, clients.curClientVec[2].ingridCollection)
+							   )
+						   && (me.ingridsInHands & DISH)
+						  )
+					   )
+					{
+						moveAsTank(kitchen.ovenCell);
+					}
+					// если в руках что то лишнее
+					else
+						moveAsTank(kitchen.nearFreeCell);
+
+					return true;
+				} else
+				{
+					cerr << "			духовка не рядом, иду к ней" << endl;
+					moveAsTank(kitchen.ovenCell);
+					return true;
+				}
+			}
+			else
+			{
+				cerr << "			напарник близко к духовке, наверно заберет" << endl;
+				return false;
+			}
+		}
+		// если не упсеем забрать выпечку
+		else
+		{
+			cerr << "		в духовке есть готовая выпечка, но я не упсею ее забрать" << endl;
+			return false;
+		}
+	}
+	// если в печке нет готовой выпечки
+	else
+		return false;
 };
 
 // создание на кухне порезанной клубнички
 void prepairChpdStrbr(){
 
+	me.whatNeedMake = CHPD_STRBR;
+
 	cerr << "готовлю клубничку" << endl;
 
 	// если руки пустые, берем цельную клубничку
-	if(me.ingridsInHands == NONE) use(STRBR_CREATE);
+	if(me.ingridsInHands == NONE)
+		moveAsTank(kitchen.strbrCell);
 	// если в руках цельная клубничка, режем ее
-	else if(me.ingridsInHands == STRBR) use(CHOP_BOARD);
-	// если в руках не цельная клубничка, то ставим это на стол
+	else if(me.ingridsInHands == STRBR)
+		moveAsTank(kitchen.chopCell);
+	// если что то другое - выкладываем
 	else
-	{
-		// если в руках порезанная клубничка, то увеличиваем счетчик приготовленных клубничек
-		if(me.ingridsInHands == CHPD_STRBR) prepChpdStrw++;
-		use(kitchen.nearFreeCell);
-	};
+		findWherePut(me.ingridsInHands);
 };
 
 // создание на кухне круасанна
 void prepairCroissant(){
 
+	me.whatNeedMake = CROISSANT;
+
 	// если я уже использовал печку, то надо либо ждать приготовления круасанна, либо забрать круасан если он готов
 	if(me.usedOven)
 	{
 		cerr << "я уже начал использовать печку" << endl;
+
 		switch(kitchen.ovenContents){
 
 			// если в печке готовится тесто и до его приготовления еще много времени, то можно поискать работу на кухне...
 			case RAW_TART:
 			case DOUGH:
 			{
-				cerr << "пока готовится моя выпечка, надо принести тарелку" << endl;
-
-				// если в руках что то есть кроме тарелки - выклдываем
-
-				pair<int, int> dishCell = kitchen.findNearest(DISH);
+				cerr << "	пока готовится моя выпечка, надо принести тарелку" << endl;
 
 				if(me.ingridsInHands == NONE)
 				{
-					cerr << "в руках ничего нет" << endl;
+					cerr << "		в руках ничего нет" << endl;
+
+					// сначала пытаемся найти тарелку, в которую можно будет положить круасанн
 
 					int minAward = 0;
 					int prodIdx = -1;
@@ -1018,65 +1660,205 @@ void prepairCroissant(){
 					{
 						if((PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection, me.desiredCollection)) // если это часть моего заказа
 						   && (kitchen.existingProductVec[i].ingridCollection & DISH)  // если продукт содержит тарелку
-						   && (kitchen.existingProductVec[i].ingridCollection > minAward)) // самый ценный продукт
+						   && (kitchen.existingProductVec[i].ingridCollection > minAward) // самый ценный продукт
+						   && (kitchen.distArrayForMe[kitchen.existingProductVec[i].y][kitchen.existingProductVec[i].x] <= (kitchen.ovenTimer / 2 - 1) * 4)) // ограничение на расстояние
 						{
 							minAward = kitchen.existingProductVec[i].ingridCollection;
 							prodIdx = i;
 						}
 					}
 
-					// если нашли тарлеку с чем то годным
-					if(prodIdx != -1)
+					// если не нашли тарелку, подходящую к нашему заказу, проверяем, может есть тарелка, удволетворяющая другому заказу, в которую можно добавить круасанн
+					if(prodIdx == -1)
 					{
-						cerr << "есть хорошенькая тарелка с продуктами..." << endl;
-						use(pair<int, int>{kitchen.existingProductVec[prodIdx].x, kitchen.existingProductVec[prodIdx].y});
-					}
-					// если не нашли тарелку с чем то подходящим, берем чистую
-					else
-						use(dishCell);
 
-					return;
+						int newOrderIdxWithCroissant = -1;
+
+						for(int i = 0; i < kitchen.existingProductNb; i++)
+						{
+							if( (kitchen.existingProductVec[i].ingridCollection & DISH)  // если продукт содержит тарелку
+								&& !(kitchen.existingProductVec[i].ingridCollection & CROISSANT) // и в тарелке нету круасанна
+							    && (kitchen.distArrayForMe[kitchen.existingProductVec[i].y][kitchen.existingProductVec[i].x] <= (kitchen.ovenTimer / 2 - 1) * 4)) // ограничение на расстояние
+							{
+								for(int j = 0; j < clients.curClientNb; j++)
+								{
+									// если тарелка после добавления в нее торта будет подходить для заказа, то берем эту тарелку
+									if(PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection | CROISSANT, clients.curClientVec[j].ingridCollection))
+									{
+										minAward = kitchen.existingProductVec[i].ingridCollection;
+										prodIdx = i;
+										newOrderIdxWithCroissant = j;
+									}
+								}
+							}
+						}
+
+						// если и эта проверка не дала результатов, то надо брать чистую тарелку
+						if(prodIdx == -1)
+						{
+							// ищем ближайшую чистую тарелку
+							pair<int, int> dishCell = kitchen.findNearest(DISH);
+
+							// если успеем взять тарелку, пока готовится тесто
+							if(kitchen.distArrayForMe[dishCell.second][dishCell.first] <= (kitchen.ovenTimer / 2 - 1) * 4)
+							{
+								moveAsTank(dishCell);
+							}
+							// если расстояние до чистой тарелки > (kitchen.ovenTimer/2 - 2), то надо сделать что то другое
+							else
+							{
+								// ищем ближайший продукт, который можно испечь
+								pair<int, int> cellWithRawTart = kitchen.findNearest(RAW_TART);
+								pair<int, int> cellWithDough   = kitchen.findNearest(DOUGH);
+
+								// если существует сырой пирог, то надо проверить, можем ли мы его взять
+								if(isExistCell(cellWithRawTart))
+								{
+									cerr << "		на кухне сущствует сырой пирог..." << endl;
+									// если сырой пирог в пределах досягаемости
+									if(kitchen.distArrayForMe[cellWithRawTart.second][cellWithRawTart.first] <= (kitchen.ovenTimer / 2 - 1) * 4)
+									{
+										cerr << "		расстояние до сырого пирога позволяет его взять" << endl;
+										moveAsTank(cellWithRawTart);
+										return;
+									}
+									// если он слишком далеко, пробуем найти тесто
+									else
+									{
+										cerr << "		до сырого пирога слишком далеко идти" << endl;
+									}
+								}
+
+								// если существует тесто, то надо проверить, можем ли мы его взять
+								if(isExistCell(cellWithDough))
+								{
+									cerr << "		на кухне сущствует тесто..." << endl;
+									// если тестл в пределах досягаемости
+									if(kitchen.distArrayForMe[cellWithDough.second][cellWithDough.first] <= (kitchen.ovenTimer / 2 - 1) * 4)
+									{
+										cerr << "		расстояние до теста позволяет его взять" << endl;
+										moveAsTank(cellWithDough);
+										return;
+									}
+									// если он слишком далеко, пробуем найти тесто
+									else
+									{
+										cerr << "		до теста слишком далеко идти" << endl;
+									}
+								}
+
+								// если нет ни пирога ни теста, то просто идем к печке
+								moveAsTank(kitchen.ovenCell);
+							}
+						}
+						// если нашли тарелку, в которую вписался бы круасан, то меняем заказ на тот, что соответсвует этой тарелке и продолжаем
+						else
+						{
+							// если заказ существует, то берем его в качестве исполняемого
+							// и идем за тарелкой
+							if(newOrderIdxWithCroissant != -1)
+							{
+								cerr << "смена заказа, есть тарелка которая с круасаном удовлетворит клиента " << newOrderIdxWithCroissant << endl;
+
+								me.desiredCollection = clients.curClientVec[newOrderIdxWithCroissant].ingridCollection;
+								me.servedClientIdx = newOrderIdxWithCroissant;
+
+								moveAsTank(pair<int, int>{kitchen.existingProductVec[prodIdx].x, kitchen.existingProductVec[prodIdx].y});
+							}
+							// если такого заказа нет, то кладем на стол
+							else
+							{
+								cerr << "КАКОЙ ТО ОЧЕНЬ СЛОЖНЫЙ СЛУЧАЙ" << endl;
+								moveAsTank(kitchen.nearFreeCell);
+							}
+						}
+					}
+					// если нашли тарлеку с чем подходящим для моего заказа
+					else
+					{
+						cerr << "		есть хорошенькая тарелка с продуктами и повар успеет до нее дойти" << endl;
+						moveAsTank(pair<int, int>{kitchen.existingProductVec[prodIdx].x, kitchen.existingProductVec[prodIdx].y});
+					}
 				}
 				else if(me.ingridsInHands & DISH)
 				{
 					cerr << "в руках тарелка, идем к печке" << endl;
-					use(OVEN);
-					return;
-				} else
+					moveAsTank(kitchen.ovenCell);
+				}
+				else
 				{
-					use(kitchen.nearFreeCell);
+					//moveAsTank(kitchen.nearFreeCell);
+					findWherePut(me.ingridsInHands);
 				}
 
 				break;
 			}
-				// если в печке готовый продукт, надо его забрать
-			case CROISSANT:
-			case TART:
-				cerr << "выпечка готова, надо забрать" << endl;
-				// если в руках нет тарелки / на тарелке уже есть круасанн
-				if( !(me.ingridsInHands & DISH) || (me.ingridsInHands & CROISSANT) )
-					use(kitchen.nearFreeCell);
-				// если руки пустые, то надо забрать выпечку
-				else
-					use(OVEN);
-				
-				break;
 
-				// если печка пустая, а флаг me.usedOven == true, то это означает, что свой круасанн я уже забрал
+			// если в печке готовый круасанн, надо его забрать
+			case CROISSANT:
+			{
+				cerr << "круасанн готов, надо забрать из печки" << endl;
+
+				// можем забирать из печки, если в руках тарелка без круасана
+				// либо если в руках вообще ничего нет
+				if( me.ingridsInHands == NONE || (me.ingridsInHands & DISH && !(me.ingridsInHands & CROISSANT)) )
+				{
+					// сбрасывается флаг использования мной печки
+					me.usedOven = false;
+
+					// сброс флага надобности 
+					if(me.whatNeedMake == CROISSANT)
+						me.whatNeedMake = -1;
+
+					moveAsTank(kitchen.ovenCell);
+				}
+				// если в руках что то лишнее - выклдываем на стол
+				else
+				{
+					moveAsTank(kitchen.nearFreeCell);
+				}
+				break;
+			}
+
+			// если в печке готовый торт, надо его забрать
+			case TART:
+			{
+				cerr << "торт готов, надо забрать из печки" << endl;
+
+				// можем забирать из печки, если в руках тарелка без торта
+				// либо если в руках вообще ничего нет
+				if( me.ingridsInHands == NONE || (me.ingridsInHands & DISH && !(me.ingridsInHands & TART)) )
+				{
+					// сбрасывается флаг использования мной печки
+					me.usedOven = false;
+
+					// сброс флага надобности 
+					if(me.whatNeedMake == TART)
+						me.whatNeedMake = -1;
+
+					moveAsTank(kitchen.ovenCell);
+				}
+				// если в руках что то лишнее - выклдываем на стол
+				else
+				{
+					moveAsTank(kitchen.nearFreeCell);
+				}
+
+				break;
+			}
+
+			// если печка пустая, а флаг me.usedOven == true, то это означает, что свою выпечку я уже забрал
 			case NONE:
-				cerr << "выпечка в руках, кладем ее на стол" << endl;
-				// если в руках приготовленный круасанн, то счетчик приготовленных круасаннов увлеичивается
-				if(me.ingridsInHands == CROISSANT) ++prepCrois;
-				// если в руках приготовленный торт, то счетчик приготовленных круасаннов увлеичивается
-				else if(me.ingridsInHands == TART) ++prepTarts;
+			{
+				findWherePut(me.ingridsInHands);
 
 				// сбрасывается флаг использования мной печки
 				me.usedOven = false;
-				use(kitchen.nearFreeCell);
 				break;
+			}
 
 			default:
-				use(OVEN);
+				findWherePut(me.ingridsInHands);
 		}
 	}
 	// если я еще не начал использовать печку
@@ -1084,63 +1866,49 @@ void prepairCroissant(){
 	{
 		cerr << "печка еще не используется" << endl;
 
-		// если сырье в печку еще не было заложено, то надо найти это сырье и положить в печку
-
-		// если руки чем то заняты
-		if(me.ingridsInHands != NONE)
+		switch(me.ingridsInHands)
 		{
-			// если в руках уже есть тесто, то надо нести к печке
-			if(me.ingridsInHands == DOUGH)
-			{
-				cerr << "в руках есть тесто" << endl;
-				// если повар около печки
+			// если в руках ничего нет, то надо взять ближайшее тесто
+			case NONE:
+
+				// если повар у печки, а в печке готовая выпечка, то надо ее забрать оттуда
 				if(me.isOvenNear())
 				{
-					cerr << "повар около печки" << endl;
-					// если духовка свободна, а в руках продукт, который можно испечь, то мой повар ее занимает
-					if(kitchen.ovenContents == NONE && (me.ingridsInHands == DOUGH || me.ingridsInHands == RAW_TART))
+					switch(kitchen.ovenContents)
 					{
-						cerr << "загружаю печку, начинаю готовку" << endl;
-						me.usedOven = true;
-						use(OVEN);
+						// если в руках пусто, повар у духовки, а в духовке круасанн, то забираем круасанн и сбрасываем флаг надобности круасанна
+						case CROISSANT:
+							me.whatNeedMake = -1;
+							cerr << "повар у духовки, выпечка готова, забираем" << endl;
+							moveAsTank(kitchen.ovenCell);
+							break;
+
+						// если в руках пусто, а в печке готовый торт, то надо его вытащить
+						case TART:
+							moveAsTank(kitchen.ovenCell);
+							break;
+
+						// если в печке пусто, либо там лежит тесто/пирог, но заложенный не мной
+						case DOUGH:
+						case RAW_TART:
+						case NONE:
+							// ищем существующее тесто / спавнер теста
+							moveAsTank(kitchen.findNearest(DOUGH));
+							break;
 					}
-					// если в руках что то есть, то выкладываем рядом
-					else
-						use(kitchen.nearFreeCell);
 				}
-				// если не у духовки
+				// если в печке нет ничего готового
+				// если не у духовки, и в руках ничего нет, то надо найти тесто
 				else
 				{
-					cerr << "повар не у печки, идем к печке" << endl;
-					use(OVEN);
+					// ищем существующее тесто / спавнер теста
+					moveAsTank(kitchen.findNearest(DOUGH));
 				}
-			}
-			// если в руках что то другое - выкладываем на свобоный стол
-			else
-			{
-				cerr << "в руках что то лишнее..." << endl;
-				// если вытащили круасан, увеличиваем счетчик
-				if(me.ingridsInHands == CROISSANT) ++prepCrois;
-				// если вытащили круасан, увеличиваем счетчик
-				else if(me.ingridsInHands == TART) ++prepTarts;
-				use(kitchen.nearFreeCell);
-			}
-		}
-		// если в руках ничего нет, надо взять ТЕСТО
-		else
-		{
-			// если повар у печки, а в печке готовая выпечка, то надо ее забрать оттуда
-			if(me.isOvenNear() && (kitchen.ovenContents == TART || kitchen.ovenContents == CROISSANT))
-			{
-				cerr << "повар у духовки, выпечка готова, забираем" << endl;
-				use(OVEN);
-			}
-			// если в печке нет ничего готового
-			else
-			{
-				// ищем существующее тесто / спавнер теста
-				use(kitchen.findNearest(DOUGH));
-			}
+				break;
+
+			default:
+				// если в руках что то есть
+				findWherePut(me.ingridsInHands);
 		}
 	}
 };
@@ -1148,15 +1916,14 @@ void prepairCroissant(){
 // создание на кухне торта
 void prepairTart(){
 
+	me.whatNeedMake = TART;
+
 	// если я уже использовал духовку, то надо либо ждать приготовления торта, либо забрать торт если он готов
 	if(me.usedOven)
 	{
-		cerr << "печка уже используется" << endl;
-
-		pair<int, int> dishCell = kitchen.findNearest(DISH);
+		cerr << "я уже начал использовать печку" << endl;
 
 		switch(kitchen.ovenContents){
-
 
 			// если в печке готовится тесто и до его приготовления еще много времени, то можно поискать работу на кухне...
 			case RAW_TART:
@@ -1178,133 +1945,215 @@ void prepairTart(){
 					{
 						if( (PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection, me.desiredCollection)) // если это часть моего заказа
 						   && (kitchen.existingProductVec[i].ingridCollection & DISH)  // если продукт содержит тарелку
-						   && (kitchen.existingProductVec[i].ingridCollection > minAward)  ) // самый ценный продукт
+						   && (kitchen.existingProductVec[i].ingridCollection > minAward) // самый ценный продукт
+						   && (kitchen.distArrayForMe[kitchen.existingProductVec[i].x][kitchen.existingProductVec[i].y] <= (kitchen.ovenTimer / 2 - 1) * 4) )
 						{
 							minAward = kitchen.existingProductVec[i].ingridCollection;
 							prodIdx = i;
 						}
 					}
 
-					// если нашли тарлеку с чем то годным
-					if(prodIdx != -1)
+					// если не нашли тарелку, подходящую к нашему заказу, проверяем, может есть тарелка, удволетворяющая другому заказу, в которую можно добавить торт
+					if(prodIdx == -1)
 					{
-						cerr << "есть хорошенькая тарелка с продуктами..." << endl;
-						use(pair<int, int>{kitchen.existingProductVec[prodIdx].x, kitchen.existingProductVec[prodIdx].y});
-					}
-					// если не нашли тарелку с чем то подходящим, берем чистую
-					else
-						use(dishCell);
 
-					return;
+						int newOrderIdxWithTart = -1;
+
+						for(int i = 0; i < kitchen.existingProductNb; i++)
+						{
+							if(     (kitchen.existingProductVec[i].ingridCollection & DISH)  // если продукт содержит тарелку
+							    && !(kitchen.existingProductVec[i].ingridCollection & TART) // и в тарелке нету торта
+							    && (kitchen.distArrayForMe[kitchen.existingProductVec[i].y][kitchen.existingProductVec[i].x] <= (kitchen.ovenTimer / 2 - 1) * 4)) // ограничение на расстояние
+							{
+								for(int j = 0; j < clients.curClientNb; j++)
+								{
+									// если тарелка после добавления в нее торта будет подходить для заказа, то берем эту тарелку
+									if(PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection | TART, clients.curClientVec[j].ingridCollection))
+									{
+										minAward = kitchen.existingProductVec[i].ingridCollection;
+										prodIdx = i;
+										newOrderIdxWithTart = j;
+									}
+								}
+							}
+						}
+
+						// если и эта проверка не дала результатов, то надо брать чистую тарелку
+						if(prodIdx == -1)
+						{
+							// ищем ближайшую чистую тарелку
+							pair<int, int> dishCell = kitchen.findNearest(DISH);
+
+							// если успеем взять тарелку, пока готовится тесто
+							if(kitchen.distArrayForMe[dishCell.second][dishCell.first] <= (kitchen.ovenTimer / 2 - 1) * 4)
+							{
+								moveAsTank(dishCell);
+							}
+							// если расстояние до чистой тарелки > (kitchen.ovenTimer/2 - 2), то надо сделать что то другое
+							else
+							{
+								// ищем ближайший продукт, который можно испечь
+								pair<int, int> cellWithRawTart = kitchen.findNearest(RAW_TART);
+								pair<int, int> cellWithDough = kitchen.findNearest(DOUGH);
+
+								// если существует сырой пирог, то надо проверить, можем ли мы его взять
+								if(isExistCell(cellWithRawTart))
+								{
+									cerr << "		на кухне сущствует сырой пирог..." << endl;
+									// если сырой пирог в пределах досягаемости
+									if(kitchen.distArrayForMe[cellWithRawTart.second][cellWithRawTart.first] <= (kitchen.ovenTimer / 2 - 1) * 4)
+									{
+										cerr << "		расстояние до сырого пирога позволяет его взять" << endl;
+										moveAsTank(cellWithRawTart);
+										return;
+									}
+									// если он слишком далеко, пробуем найти тесто
+									else
+									{
+										cerr << "		до сырого пирога слишком далеко идти" << endl;
+									}
+								}
+
+								// если существует тесто, то надо проверить, можем ли мы его взять
+								if(isExistCell(cellWithDough))
+								{
+									cerr << "		на кухне сущствует тесто..." << endl;
+									// если тестл в пределах досягаемости
+									if(kitchen.distArrayForMe[cellWithDough.second][cellWithDough.first] <= (kitchen.ovenTimer / 2 - 1) * 4)
+									{
+										cerr << "		расстояние до теста позволяет его взять" << endl;
+										moveAsTank(cellWithDough);
+										return;
+									}
+									// если он слишком далеко, пробуем найти тесто
+									else
+									{
+										cerr << "		до теста слишком далеко идти" << endl;
+									}
+								}
+
+								// если нет ни пирога ни теста, то просто идем к печке
+								moveAsTank(kitchen.ovenCell);
+							}
+						}
+						// если нашли тарелку, в которую вписался бы торт, то меняем заказ на тот, что соответсвует этой тарелке и продолжаем
+						else
+						{
+							// если заказ существует, то берем его в качестве исполняемого
+							// и идем за тарелкой
+							if(newOrderIdxWithTart != -1)
+							{
+								cerr << "смена заказа, есть тарелка которая с тортом удовлетворит клиента " << newOrderIdxWithTart << endl;
+
+								me.desiredCollection = clients.curClientVec[newOrderIdxWithTart].ingridCollection;
+								me.servedClientIdx = newOrderIdxWithTart;
+
+								moveAsTank(pair<int, int>{kitchen.existingProductVec[prodIdx].x, kitchen.existingProductVec[prodIdx].y});
+							}
+							// если такого заказа нет, то кладем на стол
+							else
+							{
+								cerr << "КАКОЙ ТО ОЧЕНЬ СЛОЖНЫЙ СЛУЧАЙ" << endl;
+								moveAsTank(kitchen.nearFreeCell);
+							}
+						}
+					}
+					// если нашли тарлеку с чем подходящим для моего заказа
+					else
+					{
+						cerr << "		есть хорошенькая тарелка с продуктами и повар успеет до нее дойти" << endl;
+						moveAsTank(pair<int, int>{kitchen.existingProductVec[prodIdx].x, kitchen.existingProductVec[prodIdx].y});
+					}
 				}
 				else if(me.ingridsInHands & DISH)
 				{
 					cerr << "в руках тарелка, идем к печке" << endl;
-					use(OVEN);
-					return;
-				} else
+					moveAsTank(kitchen.ovenCell);
+				}
+				else
 				{
-					use(kitchen.nearFreeCell);
-					return;
+					findWherePut(me.ingridsInHands);
 				}
 
 				break;
 			}
 
-			// если в печке готовый продукт, надо его забрать
+			// если в печке готовый круасанн, надо его забрать
 			case CROISSANT:
+			{
+				cerr << "круасанн готов, надо забрать из печки" << endl;
+
+				// можем забирать из печки, если в руках тарелка без круасана
+				// либо если в руках вообще ничего нет
+				if( me.ingridsInHands == NONE || (me.ingridsInHands & DISH && !(me.ingridsInHands & CROISSANT)) )
+				{
+					// сбрасывается флаг использования мной печки
+					me.usedOven = false;
+
+					// сброс флага надобности 
+					if(me.whatNeedMake == CROISSANT)
+						me.whatNeedMake = -1;
+
+					moveAsTank(kitchen.ovenCell);
+				}
+				// если в руках что то лишнее - выклдываем на стол
+				else
+				{
+					moveAsTank(kitchen.nearFreeCell);
+				}
+				break;
+			}
+
+			// если в печке готовый торт, надо его забрать
 			case TART:
 			{
-				cerr << "выпечка готова, надо забрать" << endl;
-				// если в руках есть тарелка с чем то, и на тарелке уже есть торт
-				// либо если в руках что то круче тарелки
-				if(me.ingridsInHands > DISH && me.ingridsInHands & TART)
-					use(kitchen.nearFreeCell);
-				// если руки пустые, то надо забрать выпечку
+				cerr << "торт готов, надо забрать из печки" << endl;
+
+				// можем забирать из печки, если в руках тарелка без торта
+				// либо если в руках вообще ничего нет
+				if( me.ingridsInHands == NONE || (me.ingridsInHands & DISH && !(me.ingridsInHands & TART)) )
+				{
+					// сбрасывается флаг использования мной печки
+					me.usedOven = false;
+
+					// сброс флага надобности 
+					if(me.whatNeedMake == TART)
+						me.whatNeedMake = -1;
+
+					moveAsTank(kitchen.ovenCell);
+				}
+				// если в руках что то лишнее - выклдываем на стол
 				else
-					use(OVEN);
+				{
+					moveAsTank(kitchen.nearFreeCell);
+				}
 
 				break;
 			}
-			// если печка пустая, а флаг me.usedOven == true, то это означает, что свой торт я уже забрал
+
+			// если печка пустая, а флаг me.usedOven == true, то это означает, что свою выпечку я уже забрал
 			case NONE:
-				cerr << "выпечка в руках, кладем ее на стол" << endl;
-				// если в руках приготовленный торт, то счетчик приготовленных тортов увлеичивается
-				if(me.ingridsInHands == CROISSANT) ++prepCrois;
-				// если в руках приготовленный торт, то счетчик приготовленных круасаннов увлеичивается
-				else if(me.ingridsInHands == TART) ++prepTarts;
+			{
+				findWherePut(me.ingridsInHands);
 
 				// сбрасывается флаг использования мной печки
 				me.usedOven = false;
-				use(kitchen.nearFreeCell);
 				break;
+			}
 
 			default:
-				use(OVEN);
+				moveAsTank(kitchen.ovenCell);
 		}
 	}
 	// если я еще не начал использовать печку
 	else
 	{
 		cerr << "печка еще не используется" << endl;
-		// если сырье в печку еще не было заложено, то надо найти это сырье и положить в печку
 
 		// если руки чем то заняты
-		if(me.ingridsInHands != NONE){
-
-			switch(me.ingridsInHands){
-				
-				// если в руках тесто - несем на резку
-				case DOUGH:
-					use(CHOP_BOARD);
-					break;
-
-				// если в руках рубленое тесто, надо его заправить
-				case CHPD_DOUGH: 
-					use(BLBR_CREATE);
-					break;
-
-				// если сырой торт
-				case RAW_TART:
-					// если повар у печки
-					if(me.isOvenNear())
-					{
-						cerr << "повар у печки" << endl;
-						// если духовка свободна, то можно заложить
-						if(kitchen.ovenContents == NONE)
-						{
-							cerr << "загружаю печку, начинаю готовку" << endl;
-							me.usedOven = true;
-							use(OVEN);
-						}
-						// если печка занята
-						else
-						{
-							cerr << "печка занята, в руках сырой торт, выкладываю рядом" << endl;
-							use(kitchen.nearFreeCell);
-						}
-					}
-					// если повар не у духовки - то идем к духовке
-					else
-					{
-						cerr << "повар не у печки, идем к печке" << endl;
-						use(OVEN);
-					}
-					break;
-
-				case CROISSANT:
-					prepCrois++;
-					use(kitchen.nearFreeCell);
-					break;
-
-				case TART:
-					prepTarts++;
-					use(kitchen.nearFreeCell);
-					break;
-
-				default:
-					use(kitchen.nearFreeCell);
-			}
+		if(me.ingridsInHands != NONE)
+		{
+			findWherePut(me.ingridsInHands);
 		}
 		// если в руках ничего нет, надо взять
 		else
@@ -1313,7 +2162,7 @@ void prepairTart(){
 			if(me.isOvenNear() && (kitchen.ovenContents == TART || kitchen.ovenContents == CROISSANT))
 			{
 				cerr << "повар у духовки, выпечка готова, забираем" << endl;
-				use(OVEN);
+				moveAsTank(kitchen.ovenCell);
 			}
 			// если в печке нет ничего готового
 			else
@@ -1328,10 +2177,10 @@ void prepairTart(){
 
 				// если существует сырой торт, идем за ним
 				if(isExistCell(cellWithRawTart))
-					use(cellWithRawTart);
+					moveAsTank(cellWithRawTart);
 				else if(isExistCell(cellWithChpdDough))
-					use(cellWithChpdDough);
-				else use(cellWithDough);
+					moveAsTank(cellWithChpdDough);
+				else moveAsTank(cellWithDough);
 			}
 		}
 	}
@@ -1350,7 +2199,7 @@ void collectDesired(){
 	else
 	{
 		cerr << "   можно относить в окно" << endl;
-		use(WINDOW);
+		moveAsTank(kitchen.winCell);
 	}
 };
 
@@ -1367,12 +2216,21 @@ bool prepairHardIngrids(){
 	{
 		cerr << "	по заказу нужен торт" << endl;
 
+		// если в руках готовый торт, то его надо положить либо на тарелку к чему то, либо на пустой стол
+		if(me.ingridsInHands == TART){
+
+			cerr << "у меня в руках готовый торт" << endl;
+
+			findWherePut(TART);
+			return true;
+		}
+
 		// если в руках уже есть тарелка, то нужно искать только отдельно существующие торты
 		if(me.ingridsInHands & DISH)
 		{
 			cerr << "		в руках есть тарелка" << endl;
 
-			// если в руках нет торта и на кухне нет отдельно существующего торта, то придется делать торта
+			// если в руках нет торта и на кухне нет отдельно существующего торта, то придется делать торт
 			if( !(me.ingridsInHands & TART) && !isExistCell(kitchen.getCellWithIngridStrongly(TART)) )
 			{
 				cerr << "		придется делать торт" << endl;
@@ -1388,19 +2246,20 @@ bool prepairHardIngrids(){
 		else
 		{
 			cerr << "		в руках нет тарелки" << endl;
+
 			// поиск подходящей тарелки с тортом среди уже существующих продуктов
-			int productWithDishAndTart = -1;
+			int productWithDishAndTart = -1, minAward = 0;
 			for(int i = 0; i < kitchen.existingProductNb; i++)
 			{
 				if((kitchen.existingProductVec[i].ingridCollection & TART)			// если в продукте есть торт
 					&& (kitchen.existingProductVec[i].ingridCollection & DISH)		// также есть тарелка
-					&& (PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection, me.desiredCollection))) // продукт является частью моего заказа
+					&& (PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection, me.desiredCollection)) // продукт является частью моего заказа
+				    && kitchen.existingProductVec[i].ingridCollection > minAward) // самый ценный
 				{
-					//cerr << "		существует тарелка с круасаном и мб еще чем то, подходящим под наш заказ: " << kitchen.existingProductVec[i].x << " " << kitchen.existingProductVec[i].y << endl;
+					minAward = kitchen.existingProductVec[i].ingridCollection;
 					productWithDishAndTart = i;
 				}
 			}
-
 
 			if(!((me.ingridsInHands & TART) && (me.ingridsInHands & DISH)) // в руках нет тарелки с тортом
 				 && !isExistCell(kitchen.getCellWithIngridStrongly(TART)) // нет ячейки кухни с ОТДЕЛЬНЫМ тортом
@@ -1409,22 +2268,56 @@ bool prepairHardIngrids(){
 				cerr << "		придется делать торт" << endl;
 				prepairTart();
 				return true;
-			} else
+			}
+			else
 			{
+				// если есть тарелка с тортом и еще чем то, подоходящим по заказу,
+				// то надо проверить, чтобы на тарелке также были и все остальные СЛОЖНЫЕ продукты
+
+				// если по заказу нужен круасаннн, а на тарелке с тортом круасана нет, то надо сделать круасанн
+				if(!((me.ingridsInHands & TART) && (me.ingridsInHands & DISH)) // в руках нет тарелка с тортом
+						&& productWithDishAndTart != -1 // есть тарелка с тортом на кухне
+						&& me.desiredCollection & CROISSANT // по заказу нужен круасанн
+						&& !(kitchen.existingProductVec[productWithDishAndTart].ingridCollection & CROISSANT) // тарелка с тортом не содержит круасана
+					)
+				{
+					cerr << "		есть тарелка с тортом, но на ней нет круасана, поэтому делаю круасан" << endl;
+					prepairCroissant();
+					return true;
+				}
+				// если по заказу нужна клубничка, а на тарелке с тортом клубнички нет, то надо сделать клубничку
+				else if(!((me.ingridsInHands & TART) && (me.ingridsInHands & DISH)) // в руках нет тарелка с тортом
+						&& productWithDishAndTart != -1 // есть тарелка с тортом на кухне
+						&& me.desiredCollection & CHPD_STRBR // по заказу нужен круасанн
+						&& !(kitchen.existingProductVec[productWithDishAndTart].ingridCollection & CHPD_STRBR) // тарелка с тортом не содержит клубнички
+					)
+				{
+					cerr << "		есть тарелка с тортом, но на ней нет клубнички, поэтому делаю клубничку" << endl;
+					prepairChpdStrbr();
+					return true;
+				}
 				cerr << "		НЕ придется делать торт" << endl;
 			}
 		}
 	}
 	else
 	{
+		me.whatNeedMake = -1;
 		cerr << "	торт по заказу не нужен" << endl;
 	}
-
 
 	// если по заказу нужен круасанн
 	if(me.desiredCollection & CROISSANT)
 	{
 		cerr << "	по заказу нужен круасанн" << endl;
+
+		// если в руках готовый торт, то его надо положить либо на тарелку к чему то, либо на пустой стол
+		if(me.ingridsInHands == CROISSANT){
+
+			cerr << "у меня в руках готовый круасанн" << endl;
+			findWherePut(CROISSANT);
+			return true;
+		}
 
 		// если в руках уже есть тарелка, то нужно искать только отдельно существующие круасанны
 		if(me.ingridsInHands & DISH)
@@ -1448,14 +2341,16 @@ bool prepairHardIngrids(){
 			cerr << "		в руках нет тарелки" << endl;
 
 			// поиск подходящей тарелки с круасанном среди уже существующих продуктов
-			int productWithDishAndCrois = -1;
+			int productWithDishAndCrois = -1, minAward = 0;
 			for(int i = 0; i < kitchen.existingProductNb; i++)
 			{
 				if((kitchen.existingProductVec[i].ingridCollection & CROISSANT)		// если в продукте есть круасанн
 					&& (kitchen.existingProductVec[i].ingridCollection & DISH)		// также есть тарелка
-					&& (PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection, me.desiredCollection))) // продукт является частью моего заказа
+					&& (PRODUCT::is1PartOf2(kitchen.existingProductVec[i].ingridCollection, me.desiredCollection)) // продукт является частью моего заказа
+					&& kitchen.existingProductVec[i].ingridCollection > minAward) // самый ценный
 				{
 					//cerr << "		существует тарелка с круасаном и мб еще чем то, подходящим под наш заказ: " << kitchen.existingProductVec[i].x << " " << kitchen.existingProductVec[i].y << endl;
+					minAward = kitchen.existingProductVec[i].ingridCollection;
 					productWithDishAndCrois = i;
 				}
 			}
@@ -1470,10 +2365,38 @@ bool prepairHardIngrids(){
 			} else
 			{
 				cerr << "		НЕ придется делать круасанн" << endl;
+
+				// если есть тарелка с круасаном и еще чем то, подоходящим по заказу,
+				// то надо проверить, чтобы на тарелке также были и все остальные СЛОЖНЫЕ продукты
+
+				// если по заказу нужен торт, а на тарелке с круасаном торта нет, то надо сделать торт
+				if(!((me.ingridsInHands & CROISSANT) && (me.ingridsInHands & DISH)) // в руках нет тарелка с круасаном
+						&& productWithDishAndCrois != -1 // есть тарелка с круасаном на кухне
+						&& me.desiredCollection & TART // по заказу нужен торт
+						&& !(kitchen.existingProductVec[productWithDishAndCrois].ingridCollection & TART) // тарелка с круасаном не содержит торта
+					)
+				{
+					cerr << "		есть тарелка с круасаном, но на ней нет торта, поэтому делаю торт" << endl;
+					prepairTart();
+					return true;
+				}
+				// если по заказу нужна клубничка, а на тарелке с круасаном клубнички нет, то надо сделать клубничку
+				else if(!((me.ingridsInHands & CROISSANT) && (me.ingridsInHands & DISH)) // в руках нет тарелка с круасаном
+						&& productWithDishAndCrois != -1 // есть тарелка с круасаном на кухне
+						&& me.desiredCollection & CHPD_STRBR // по заказу нужна клубничка
+						&& !(kitchen.existingProductVec[productWithDishAndCrois].ingridCollection & CHPD_STRBR) // тарелка с круасаном не содержит клубничку
+					)
+				{
+					cerr << "		есть тарелка с круасаном, но на ней нет порезанной клубнички, поэтому делаю клучбнику" << endl;
+					prepairChpdStrbr();
+					return true;
+				}
 			}
 		}
-	} else
+	}
+	else
 	{
+		me.whatNeedMake = -1;
 		cerr << "	круасанн по заказу не нужен" << endl;
 	}
 
@@ -1481,6 +2404,15 @@ bool prepairHardIngrids(){
 	if(me.desiredCollection & CHPD_STRBR)
 	{
 		cerr << "	по заказу нужна порезанная клубничка" << endl;
+
+		// если в руках порезанная клубничка, то ее надо положить либо на тарелку к чему то, либо на пустой стол
+		if(me.ingridsInHands == CHPD_STRBR){
+
+			cerr << "у меня в руках порезанная клубчника" << endl;
+
+			findWherePut(CHPD_STRBR);
+			return true;
+		}
 
 		// если в руках уже есть тарелка, то нужно искать только отдельно существующие резанные клубнички
 		if(me.ingridsInHands & DISH)
@@ -1528,8 +2460,10 @@ bool prepairHardIngrids(){
 				cerr << "		НЕ придется делать порезанную клубничку" << endl;
 			}
 		}
-	} else
+	}
+	else
 	{
+		me.whatNeedMake = -1;
 		cerr << "	порезанная клубничка по заказу не нужен" << endl;
 	}
 
@@ -1559,6 +2493,10 @@ void makePrepairings(){
 // если приготовления завершились, то можно пытаться собирать рецепты
 void makeSomeOrder(){
 
+	// если надо спасать выпечку, то ничего другого пока делать не могу
+	if(saveBaking())
+		return;
+
 	// если заказ клиента изменился, а в руках моего повара есть тарелка с какими то ингридиентами
 	// то надо либо выбрать новый исполняемый заказ, в который входят все ингридиеты с тарелки
 	//		   либо, если тарелка с такими ингридиентами не подходит ни для одного из текущих заказов,
@@ -1571,6 +2509,9 @@ void makeSomeOrder(){
 		// если оппонент тоже выбрал первого клиента, то берем заказ у нулевого клиента
 		//if(opponent.servedClientIdx == 1)
 		//	me.servedClientIdx = 0;
+
+		me.usedOven = false;
+		me.whatNeedMake = -1;
 
 		cerr << "заказ не выбран. выбираю " << me.servedClientIdx << "-й" << endl;
 
@@ -1589,19 +2530,23 @@ void makeSomeOrder(){
 		{
 			// надо найти тот заказ, который выполняет мой повар
 			int desiredIdx = -1;
-			for(int i = 0; i < 3; i++)
+			for(int i = 0; i < clients.curClientNb; i++)
+			{
 				if(clients.curClientVec[i].ingridCollection == me.desiredCollection)
 					desiredIdx = i;
+			}
 
 			// если заказа, который собирает мой повар нет, значит напарник сделал именно этот заказ
 			if(desiredIdx == -1){
 
 				cerr << "выполняемого заказа больше нет..." << endl;
+				me.usedOven = false;
+				me.whatNeedMake = -1;
 
 				// если в рука есть тарелка с какими то ингридиентами, то надо либо найти заказ,
 				// для которого содержимое моей тарелки подходит,
 				// либо, если содержимое тарелки не подходит ни для одного заказа, то помыть ее
-				if(me.ingridsInHands > DISH){
+				if(me.ingridsInHands & DISH && me.ingridsInHands > DISH){
 
 					// проверяем все текущие заказы на совпадение с теми ингридиентами, что есть у меня в тарелке
 					int orderWithSameIngrids = -1;
@@ -1623,15 +2568,15 @@ void makeSomeOrder(){
 						// это может быть какой либо сырой ингридиент (клубничка/тесто/порезанное тесто/сырой пирог)
 
 						// если это клубничка/теста, надопорезать
-						if(me.ingridsInHands == STRBR || me.ingridsInHands == DOUGH) use(CHOP_BOARD);
+						if(me.ingridsInHands == STRBR || me.ingridsInHands == DOUGH) moveAsTank(kitchen.chopCell);
 
 						// если это резаное тесто, делаем из него сырой пирог
-						else if(me.ingridsInHands == CHPD_DOUGH) use(BLBR_CREATE);
+						else if(me.ingridsInHands == CHPD_DOUGH) moveAsTank(kitchen.blbrCell);
 
 						// если это сырой пирог, кладем его в духовку
-						else if(me.ingridsInHands == RAW_TART) use(OVEN);
+						else if(me.ingridsInHands == RAW_TART) moveAsTank(kitchen.ovenCell);
 
-						else use(DISHWASH);
+						else moveAsTank(kitchen.dishCell);
 					}
 				}
 				// если в руках (нет тарелки) / (пустая тарелка), то надо выбрать новый заказ
@@ -1704,6 +2649,7 @@ int main()
 	while(1){
 
 		cin >> turnsRemaining;
+
 		auto begin = std::chrono::high_resolution_clock::now();
 
 		readInput();
